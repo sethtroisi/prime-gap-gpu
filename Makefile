@@ -18,7 +18,8 @@ OUT	= combined_sieve gap_stats gap_test_simple benchmark benchmark_google
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
 NVCC	= nvcc
-CUDA_FLAGS	= $(OPT) -Xcompiler -Wall -Xcompiler -Werror -Xcompiler -fopenmp
+ARCH    = sm_61
+CUDA_FLAGS	= $(OPT) -arch=$(ARCH) -Xcompiler -Wall -Xcompiler -Werror -Xcompiler -fopenmp
 BITS    = 1024
 
 LDFLAGS	= -lgmp -lprimesieve
@@ -36,7 +37,7 @@ endif
 all: $(OUT)
 
 sieve_small.o: sieve_small.cpp
-	nvcc -o $@ -x cu -c $^ -arch=sm_61 $(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
+	nvcc -o $@ -x cu -c $^ $(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
 
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
@@ -54,8 +55,8 @@ gap_test_simple: gap_test_simple.cpp gap_common.o gap_test_common.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 gap_test_gpu: gap_test_gpu.cu gap_common.o gap_test_common.o sieve_small.o
-	nvcc -o $@ -DGPU_BITS=$(BITS) $^
-		-arch=sm_61 $(CUDA_FLAGS) \
+	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
+		$(CUDA_FLAGS) \
 		-I../CGBN/include \
 		$(filter-out -fopenmp, $(LDFLAGS))
 
