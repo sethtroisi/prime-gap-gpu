@@ -112,7 +112,7 @@ const size_t QUEUE_SIZE = 140 * GPU_BATCHES * GPU_BATCH_SIZE / 100;
 // From 701# I believe.
 // 1M -> 2000/second
 // 200K -> 4000/second
-const size_t CPU_SIEVE_LIMIT = 70'000;
+const size_t CPU_SIEVE_LIMIT = 200'000;
 
 const size_t COMBINED_SIEVE_THREADS = 8;
 

@@ -40,6 +40,9 @@ using namespace std::chrono;
 #define BLOCK_SIZE 32
 
 
+#define BIT_IS_BIT
+
+
 // support routines
 void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
   // check for cuda errors
@@ -113,7 +116,7 @@ __global__ void method2_medium_primes_kernal(
             // as large as prime^2
             uint64_t t = ((uint64_t) neg_inv_K) * base_r;
             if (index == 0 && prime >= next_print) {
-                printf("prime(%u): %u\n", pi, prime);
+                printf("\tGPU @ prime(%u): %u\n", pi, prime);
 
                 if (next_print == next_mult) {
                     print_mult *= 10;
@@ -167,15 +170,18 @@ __global__ void method2_medium_primes_kernal(
                     continue;
 
                 size_t index = (size_t) mii * num_coprimes + cxti;
+#ifdef BIT_IS_BIT
+                composite[index >> 3] |= 1 << (index&7);
+#else
                 composite[index] = true;
-                //composite[index >> 3] |= 1 << (index&7);
+#endif  // BIT_IS_BIT
                 small_factors += 1;
             }
         }
     }
 
     if (small_factors == 0 || ((index % 37 == 0) && small_factors > 100'00'000)) {
-        printf(" GPU thread: %d -> %u factors\n", index, small_factors);
+        printf("\tGPU thread: %d -> %u factors\n", index, small_factors);
     }
 }
 
@@ -211,7 +217,7 @@ int32_t invert_tmp(int32_t a, int32_t p) {
 
 class GPUSieve {
     public:
-        cudaStream_t runner_stream;
+        cudaStream_t runner;
 
         // Cache stuff
         uint32_t num_coprimes;
@@ -235,17 +241,18 @@ class GPUSieve {
         uint32_t K_mod2310;
 
         ~GPUSieve() {
-            printf("~GPUSieve\n");
+            printf("\t~GPUSieve\n");
             CUDA_CHECK(cudaFree(coprime_X));
             CUDA_CHECK(cudaFree(is_coprime2310));
             CUDA_CHECK(cudaFree(is_m_coprime2310));
             CUDA_CHECK(cudaFree(m_reindex));
+            CUDA_CHECK(cudaFree(composite));
 
             CUDA_CHECK(cudaFree(primes));
             CUDA_CHECK(cudaFree(remainders));
             CUDA_CHECK(cudaFree(neg_inv_Ks));
 
-            CUDA_CHECK(cudaStreamDestroy(runner_stream));
+            CUDA_CHECK(cudaStreamDestroy(runner));
         }
 
         GPUSieve(
@@ -257,12 +264,11 @@ class GPUSieve {
             auto T0 = high_resolution_clock::now();
 
             CUDA_CHECK(cudaSetDevice(0));
-            CUDA_CHECK(cudaStreamCreate(&runner_stream));
+            CUDA_CHECK(cudaStreamCreate(&runner));
 
             // TODO: only use this if batch takes > 100ms
-            // Reduces GPU_THREAD cpu from 100% while waiting
-            //CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
-            CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+            CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
+            //CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
 
 
             { // Compute prime stuff and copy over
@@ -287,56 +293,59 @@ class GPUSieve {
                 }
 
                 const size_t bytes = sizeof(uint32_t) * num_primes;
-                CUDA_CHECK(cudaMalloc(&primes, bytes));
-                CUDA_CHECK(cudaMemcpy(primes, host_primes.data(), bytes, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMallocAsync(&primes, bytes, runner));
+                CUDA_CHECK(cudaMemcpyAsync(primes, host_primes.data(), bytes, cudaMemcpyHostToDevice, runner));
 
-                CUDA_CHECK(cudaMalloc(&remainders, bytes));
-                CUDA_CHECK(cudaMemcpy(remainders, host_remainders.data(), bytes, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMallocAsync(&remainders, bytes, runner));
+                CUDA_CHECK(cudaMemcpyAsync(remainders, host_remainders.data(), bytes, cudaMemcpyHostToDevice, runner));
 
-                CUDA_CHECK(cudaMalloc(&neg_inv_Ks, bytes));
-                CUDA_CHECK(cudaMemcpy(neg_inv_Ks, host_neg_inv_Ks.data(), bytes, cudaMemcpyHostToDevice));
-                // TODO use stream synchronize
-                cudaDeviceSynchronize();
+                CUDA_CHECK(cudaMallocAsync(&neg_inv_Ks, bytes, runner));
+                CUDA_CHECK(cudaMemcpyAsync(neg_inv_Ks, host_neg_inv_Ks.data(), bytes, cudaMemcpyHostToDevice, runner));
+
+                // DO I NEED TO SYNC BEFORE MEMORY IS UNALLOCATED?
             }
 
             num_coprimes = caches.coprime_X.size();
             const size_t X_bytes = sizeof(uint32_t) * num_coprimes;
-            CUDA_CHECK(cudaMalloc(&coprime_X, X_bytes));
-            CUDA_CHECK(cudaMemcpy(coprime_X, (void*)caches.coprime_X.data(), X_bytes, cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocAsync(&coprime_X, X_bytes, runner));
+            CUDA_CHECK(cudaMemcpyAsync(coprime_X, (void*)caches.coprime_X.data(), X_bytes, cudaMemcpyHostToDevice, runner));
 
-            CUDA_CHECK(cudaMalloc(&is_coprime2310, 2310));
-            CUDA_CHECK(cudaMemcpy(is_coprime2310, (void*)caches.is_coprime2310.data(), 2310, cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocAsync(&is_coprime2310, 2310, runner));
+            CUDA_CHECK(cudaMemcpyAsync(is_coprime2310, (void*)caches.is_coprime2310.data(), 2310, cudaMemcpyHostToDevice, runner));
 
             {
                 // From bitset to char
                 char is_m_coprime2310_tmp[2310];
                 for (size_t i = 0; i < 2310; i++) is_m_coprime2310_tmp[i] = caches.is_m_coprime2310[i];
-                CUDA_CHECK(cudaMalloc(&is_m_coprime2310, 2310));
-                CUDA_CHECK(cudaMemcpy(is_m_coprime2310, is_m_coprime2310_tmp, 2310, cudaMemcpyHostToDevice));
-                // TODO use stream synchronize
-                cudaDeviceSynchronize();
+                CUDA_CHECK(cudaMallocAsync(&is_m_coprime2310, 2310, runner));
+                CUDA_CHECK(cudaMemcpyAsync(is_m_coprime2310, is_m_coprime2310_tmp, 2310, cudaMemcpyHostToDevice, runner));
+
+                // DO I NEED TO SYNC BEFORE MEMORY IS UNALLOCATED?
             }
 
             const size_t m_reindex_bytes = sizeof(int32_t) * caches.m_reindex.size();
-            CUDA_CHECK(cudaMalloc(&m_reindex, m_reindex_bytes));
-            CUDA_CHECK(cudaMemcpy(m_reindex, caches.m_reindex.data(), m_reindex_bytes, cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocAsync(&m_reindex, m_reindex_bytes, runner));
+            CUDA_CHECK(cudaMemcpyAsync(m_reindex, caches.m_reindex.data(), m_reindex_bytes, cudaMemcpyHostToDevice, runner));
 
+#ifdef BIT_IS_BIT
+            composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms / 8 + 1;
+#else
             composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms;
-            //composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms / 8 + 1;
-            CUDA_CHECK(cudaMalloc(&composite, composite_bytes));
-            CUDA_CHECK(cudaMemset(composite, 0, composite_bytes));
+#endif  // BIT_IS_BIT
+            CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
+            CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
             if (config.verbose >= 1) {
-                printf("GPUSieve(): malloced: 4x %d, %lu, %lu, 2x%d, %lu, composite: %lu MB\n",
+                printf("\tGPUSieve(): malloced: 4x %d, %lu, %lu, 2x%d, %lu, composite: %lu MB\n",
                         4*num_primes, X_bytes, X_bytes/2, 2310, m_reindex_bytes, composite_bytes / 1024 / 1024);
             }
 
             M_start   = config.mstart;
             K_mod2310 = caches.K_mod2310;
 
+            cudaStreamSynchronize(runner);
             auto T1 = high_resolution_clock::now();
             auto gpu_setup_ms = duration_cast<milliseconds>(T1 - T0).count();
-            cudaDeviceSynchronize();
             cout << "GPU setup: " << gpu_setup_ms << " ms" << endl;
         }
 
@@ -349,7 +358,7 @@ class GPUSieve {
 
             { // Run GPU Sieve!
                 auto T0 = high_resolution_clock::now();
-                method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE>>>(
+                method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
                     this->is_m_coprime2310,
                     this->is_coprime2310,
                     // Maybe later? is_m_coprime
@@ -371,8 +380,7 @@ class GPUSieve {
                     this->coprime_X // TODO pass a portion of this or something IDK
                 );
 
-                // TODO streamsynchronize after async memcopy
-                cudaDeviceSynchronize();
+                cudaStreamSynchronize(runner);
 
                 auto T1 = high_resolution_clock::now();
                 auto kernel_ms = duration_cast<milliseconds>(T1 - T0).count();
@@ -388,9 +396,12 @@ class GPUSieve {
                 // Segmented by 1M rows
                 const size_t valid_m = caches.valid_ms;
                 const size_t segment_size = 1'000'000;
-                //assert( segment_size % 8 == 0 ); // needs to be true for segment_bytes to work
-                //const size_t segment_bytes = sizeof(char) * segment_size * num_coprimes / 8;
+#ifdef BIT_IS_BIT
+                assert( segment_size % 8 == 0 ); // needs to be true for segment_bytes to work
+                const size_t segment_bytes = sizeof(char) * segment_size * num_coprimes / 8;
+#else
                 const size_t segment_bytes = sizeof(char) * segment_size * num_coprimes;
+#endif  // BIT_IS_BIT
                 char* host_composite;
                 CUDA_CHECK(cudaMallocHost((void**) &host_composite, segment_bytes));
                 if (config.verbose >= 2) {
@@ -404,16 +415,20 @@ class GPUSieve {
                         printf("\tCopying over mi [%lu, %lu)\n", start_mii, last_mii);
                     }
 
-                    //size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char) / 8;
+#ifdef BIT_IS_BIT
+                    size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char) / 8;
+#else
                     size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char);
+#endif  // BIT_IS_BIT
                     assert( 0 < chunk_bytes && chunk_bytes <= segment_bytes );
                     assert( chunk_bytes == segment_bytes || last_mii == valid_m );
-                    CUDA_CHECK(cudaMemcpy(host_composite, composite_start, chunk_bytes, cudaMemcpyDeviceToHost));
+                    CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_start, chunk_bytes, cudaMemcpyDeviceToHost, runner));
+                    cudaStreamSynchronize(runner);
                     composite_start += chunk_bytes;
 
                     // TODO could do something smart like build up chunks of dynamic bitset and commit them.
                     size_t had_factor = 0;
-                    //#pragma omp parallel for schedule(static, 8) num_threads(config.threads) reduction(+:had_factor)
+                    #pragma omp parallel for schedule(static, 8) num_threads(config.threads) reduction(+:had_factor)
                     for(size_t mii = start_mii; mii < last_mii; mii++) {
                         size_t offset = (mii - start_mii) * num_coprimes;
                         uint64_t m = M_start + caches.valid_mi[mii];
@@ -422,8 +437,11 @@ class GPUSieve {
 
                         for (size_t xi = 0; xi < num_coprimes; xi++, offset++) {
                             // if [mii][xi] is composite
-                            //if (host_composite[offset >> 3] & (1 << (offset & 7))) {
+#ifdef BIT_IS_BIT
+                            if (host_composite[offset >> 3] & (1 << (offset & 7))) {
+#else
                             if (host_composite[offset]) {
+#endif  // BIT_IS_BIT
                                 had_factor += 1;
                                 auto X = caches.coprime_X[xi];
                                 auto xii = x_reindex_m[X];
@@ -453,8 +471,7 @@ class GPUSieve {
                 CUDA_CHECK(cudaFreeHost(host_composite));
                 auto T1 = high_resolution_clock::now();
                 auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
-                printf("GPU copy-back: %lu ms | %lu factors\n", bitfiddling_ms, found_factors);
+                printf("\tGPU copy-back: %lu ms | %lu factors\n", bitfiddling_ms, found_factors);
             }
-
         }
 };
