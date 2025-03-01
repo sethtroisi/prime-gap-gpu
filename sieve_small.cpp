@@ -415,6 +415,23 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                 }
             }
         }
+        assert( D % 2 == 0 );
+        // 2 | D <=> K is odd <=> all m % 2 == 1
+        // m % 2 == 1 -> any odd x will be divisible by two
+        // These can't have unknowns so skip by marking as not-coprime.
+        // TODO backport this logic assuming it's valid.
+        if (1) {
+            size_t skipped = 0;
+            for (size_t x = 1; x <= SL; x += 2) {
+                if (is_offset_coprime[x]) {
+                    is_offset_coprime[x] = 0;
+                    skipped += 1;
+                }
+            }
+            if (config.verbose >= 2) {
+                printf("\tSkipped %lu coprime X which are always divisible by 2\n", skipped);
+            }
+        }
 
         // Center should be marked composite by every prime.
         assert(is_offset_coprime[0] == 0);
@@ -425,6 +442,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                     coprime_X.push_back(X);
                     coprime_count += 1;
                     x_reindex[X] = coprime_count;
+                    //printf("\tcoprime(%lu) = %lu\n", coprime_count, X);
                 }
             }
             assert(coprime_count == coprime_X.size());
@@ -432,8 +450,9 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
 
         // Start at m_wheel == 0 so that re_index_m_wheel == 1 (D=1) works.
 
-        for (size_t m_wheel = 0; m_wheel < x_reindex_wheel_size; m_wheel++) {
+        for (size_t m_wheel = 1; m_wheel < x_reindex_wheel_size; m_wheel++) {
             if (gcd(x_reindex_wheel_size, m_wheel) > 1) continue;
+
             x_reindex_wheel[m_wheel].resize(SL+1, 0);
 
             // m * K % wheel => m_wheel % wheel
@@ -454,6 +473,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                 }
             }
             x_reindex_wheel_count[m_wheel] = coprime_count_wheel;
+            assert(coprime_count_wheel >= 1);
 
             {
                 size_t x_reindex_limit = std::numeric_limits<
@@ -463,6 +483,16 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                 // Fix by changing x_reindex_wheel type to int32_t
                 assert(coprime_count_wheel < x_reindex_limit);  // See comment above.
             }
+        }
+
+        for (const auto X: coprime_X) {
+            size_t count = 0;
+            for (size_t i = 0; i < x_reindex_wheel_size; i++) {
+                if (x_reindex_wheel[i].size() && x_reindex_wheel[i][X] > 0) {
+                    count += 1;
+                }
+            }
+            assert( count > 0 ); // coprime_X which is never coprime???
         }
 
         uint32_t max_composites = *std::max_element(
@@ -545,6 +575,8 @@ std::unique_ptr<SieveOutput> save_unknowns(
     const uint32_t D = config.d;
     const int32_t SL = config.sieve_length;
 
+    uint32_t count_by_X[SL+1] = {};
+
     size_t count_a = 0;
     size_t count_b = caches.valid_mi.size() * caches.coprime_X.size();
 
@@ -598,7 +630,7 @@ std::unique_ptr<SieveOutput> save_unknowns(
         // TODO consider if I can use __builtin_ctz or __builtin_ffs to avoid looking at each index
         // would take 8 bytes from comp vector and make a 64bit int then do repeat builtin_ffs.
 
-        // Index of last unknown.
+        // Index of last unknown (in coprime_X)
         int last_u_i = 0;
 
         const size_t max_i = composite_index + caches.composite_line_size;
@@ -611,6 +643,7 @@ std::unique_ptr<SieveOutput> save_unknowns(
 
             assert( delta <= 0xFFFF );
             deltas.push_back(delta);
+            count_by_X[caches.coprime_X[u_i]]++;
 
             last_u_i = u_i;
             found += 1;
@@ -619,6 +652,27 @@ std::unique_ptr<SieveOutput> save_unknowns(
         assert( found <= 0xFF );
         std::get<1>(output->m_inc[mii]) = found;
         count_a += found;
+    }
+
+    {
+        // Every unknown is coprime (this is nearly a tautology from count_by_X[...]
+        for(int32_t i = 0; i <= SL; i++) {
+            if (count_by_X[i] > 0) {
+                assert( caches.x_reindex[i] > 0 );
+                assert( caches.coprime_X[caches.x_reindex[i] - 1] == i );
+            }
+        }
+        //cout << "\tEvery unknown at a coprime" << endl;
+
+        if (caches.valid_ms >= 100'000) {
+            for (const auto X : caches.coprime_X) {
+                if (count_by_X[X] == 0) {
+                    cout << "\tNo unknowns for " << X << endl;
+                }
+                assert( count_by_X[X] > 0 );
+            }
+        }
+        cout << "\tEvery coprime has a unknown" << endl;
     }
 
     if (config.verbose >= 0) {
