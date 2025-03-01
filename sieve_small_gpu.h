@@ -167,13 +167,14 @@ __global__ void method2_medium_primes_kernal(
                     continue;
 
                 size_t index = (size_t) mii * num_coprimes + cxti;
-                composite[index] = true;
+                //composite[index] = true;
+                composite[index >> 3] |= 1 << (index&7);
                 small_factors += 1;
             }
         }
     }
 
-    if (small_factors == 0 || small_factors > 10'00'000) {
+    if (small_factors == 0 || ((index % 37 == 0) && small_factors > 100'00'000)) {
         printf(" GPU thread: %d -> %u factors\n", index, small_factors);
     }
 }
@@ -320,12 +321,15 @@ class GPUSieve {
             CUDA_CHECK(cudaMalloc(&m_reindex, m_reindex_bytes));
             CUDA_CHECK(cudaMemcpy(m_reindex, caches.m_reindex.data(), m_reindex_bytes, cudaMemcpyHostToDevice));
 
-            composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms;
+            //composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms;
+            composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms / 8 + 1;
             CUDA_CHECK(cudaMalloc(&composite, composite_bytes));
             CUDA_CHECK(cudaMemset(composite, 0, composite_bytes));
 
-            printf("GPUSieve(): malloced: 4x %d, %lu, %lu, 2x%d, %lu, %lu\n",
-                    4*num_primes, X_bytes, X_bytes/2, 2310, m_reindex_bytes, composite_bytes);
+            if (config.verbose >= 1) {
+                printf("GPUSieve(): malloced: 4x %d, %lu, %lu, 2x%d, %lu, composite: %lu MB\n",
+                        4*num_primes, X_bytes, X_bytes/2, 2310, m_reindex_bytes, composite_bytes / 1024 / 1024);
+            }
 
             M_start   = config.mstart;
             K_mod2310 = caches.K_mod2310;
@@ -337,6 +341,7 @@ class GPUSieve {
         }
 
         void run_sieve(
+            const Config &config,
             uint64_t M_start, uint32_t M_inc,
             const Cached &caches, dynamic_bitset<uint32_t> &output_composite
         ) {
@@ -383,17 +388,22 @@ class GPUSieve {
                 // Segmented by 1M rows
                 const size_t valid_m = caches.valid_ms;
                 const size_t segment_size = 1'000'000;
-                const size_t segment_bytes = sizeof(char) * segment_size * num_coprimes;
+                assert( segment_size % 8 == 0 ); // needs to be true for segment_bytes to work
+                const size_t segment_bytes = sizeof(char) * segment_size * num_coprimes / 8;
                 char* host_composite;
                 CUDA_CHECK(cudaMallocHost((void**) &host_composite, segment_bytes));
-                printf("\thost buffer: %lu\n", segment_bytes);
+                if (config.verbose >= 2) {
+                    printf("\thost buffer: %lu\n", segment_bytes);
+                }
 
                 char* composite_start = composite;
                 for (size_t start_mii = 0; start_mii < valid_m; start_mii += segment_size) {
                     size_t last_mii = std::min(start_mii + segment_size, valid_m);
-                    printf("\tCopying over mi [%lu, %lu)\n", start_mii, last_mii);
+                    if (config.verbose >= 2) {
+                        printf("\tCopying over mi [%lu, %lu)\n", start_mii, last_mii);
+                    }
 
-                    size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char);
+                    size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char) / 8;
                     assert( 0 < chunk_bytes && chunk_bytes <= segment_bytes );
                     assert( chunk_bytes == segment_bytes || last_mii == valid_m );
                     CUDA_CHECK(cudaMemcpy(host_composite, composite_start, chunk_bytes, cudaMemcpyDeviceToHost));
@@ -402,14 +412,15 @@ class GPUSieve {
                     // TODO could do something smart like build up chunks of dynamic bitset and commit them.
                     size_t had_factor = 0;
                     size_t offset = 0;
+                    #pragma omp parallel for schedule(static, 8) num_threads(config.threads)
                     for(size_t mii = start_mii; mii < last_mii; mii++) {
                         uint64_t m = M_start + caches.valid_mi[mii];
                         const auto &x_reindex_m = caches.x_reindex_wheel[m % caches.x_reindex_wheel_size];
                         size_t m_offset = mii * caches.composite_line_size;
 
-                        for (size_t xi = 0; xi < num_coprimes; xi++) {
+                        for (size_t xi = 0; xi < num_coprimes; xi++, offset++) {
                             // if [mii][xi] is composite
-                            if (host_composite[offset++]) {
+                            if (host_composite[offset >> 3] & (1 << (offset & 7))) {
                                 had_factor += 1;
                                 auto X = caches.coprime_X[xi];
                                 auto xii = x_reindex_m[X];
@@ -425,7 +436,9 @@ class GPUSieve {
                             }
                         }
                     }
-                    printf("\tmi [%lu, %lu) -> %lu factors\n", start_mii, last_mii, had_factor);
+                    if (config.verbose >= 2) {
+                        printf("\tmi [%lu, %lu) -> %lu factors\n", start_mii, last_mii, had_factor);
+                    }
                     found_factors += had_factor;
                 }
 

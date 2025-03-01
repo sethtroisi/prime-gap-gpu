@@ -1231,7 +1231,7 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
     // Also run GPUSieve and see what happens
     if (1) { // Medium Primes
         auto gsieve = GPUSieve(config, K, caches, SMALL_THRESHOLD, MEDIUM_THRESHOLD);
-        gsieve.run_sieve(config.mstart, config.minc, caches, composite);
+        gsieve.run_sieve(config, config.mstart, config.minc, caches, composite);
     } else {
         /**
          * Old (5e782547) parallelization was:
