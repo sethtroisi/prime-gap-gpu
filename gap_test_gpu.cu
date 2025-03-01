@@ -609,6 +609,8 @@ size_t add_to_processing(
         assert( interval->unknowns[1].size() == (size_t) found );
         assert( interval->unknowns[1].back() <= sl );
 
+
+
         // No longer need a copy in SieveResult.
         sieve->result->unknowns[sieve->current_index - 1].clear();
         // Try to reclaim memory.

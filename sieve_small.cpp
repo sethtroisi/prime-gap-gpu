@@ -630,6 +630,8 @@ std::unique_ptr<SieveOutput> save_unknowns(
         // TODO consider if I can use __builtin_ctz or __builtin_ffs to avoid looking at each index
         // would take 8 bytes from comp vector and make a 64bit int then do repeat builtin_ffs.
 
+        // TODO uint8 delta is probably valid again!
+
         // Index of last unknown (in coprime_X)
         int last_u_i = 0;
 
@@ -655,16 +657,16 @@ std::unique_ptr<SieveOutput> save_unknowns(
     }
 
     {
-        // Every unknown is coprime (this is nearly a tautology from count_by_X[...]
+        // Every unknown is at a coprime. This is a tautology from count_by_X[...]
         for(int32_t i = 0; i <= SL; i++) {
             if (count_by_X[i] > 0) {
                 assert( caches.x_reindex[i] > 0 );
                 assert( caches.coprime_X[caches.x_reindex[i] - 1] == i );
             }
         }
-        //cout << "\tEvery unknown at a coprime" << endl;
 
         if (caches.valid_ms >= 100'000) {
+            // Every coprime should have an unknown
             for (const auto X : caches.coprime_X) {
                 if (count_by_X[X] == 0) {
                     cout << "\tNo unknowns for " << X << endl;
@@ -672,7 +674,6 @@ std::unique_ptr<SieveOutput> save_unknowns(
                 assert( count_by_X[X] > 0 );
             }
         }
-        cout << "\tEvery coprime has a unknown" << endl;
     }
 
     if (config.verbose >= 0) {
