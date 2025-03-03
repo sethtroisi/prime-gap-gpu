@@ -14,7 +14,9 @@
 
 OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o modulo_search.o gap_test_common.o
-OUT	= combined_sieve gap_stats gap_test_simple benchmark benchmark_google
+OUT	= combined_sieve combined_sieve_small \
+	  gap_stats gap_test_simple gap_test_gpu \
+	  benchmark benchmark_google
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
 NVCC	= nvcc
@@ -36,8 +38,9 @@ endif
 
 all: $(OUT)
 
-sieve_small.o: sieve_small.cpp
-	nvcc -o $@ -x cu -c $^ $(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
+sieve_small.o: sieve_small.cpp sieve_small_gpu.h
+	nvcc -o $@ -x cu -c $(filter-out %.h, $^) \
+		$(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
 
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
@@ -46,7 +49,8 @@ combined_sieve: combined_sieve.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES)
 
 combined_sieve_small: combined_sieve_small.cpp $(OBJS) sieve_small.o
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES) -L /usr/local/cuda/lib64 -lcuda -lcudart
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES) \
+		-L /usr/local/cuda/lib64 -lcuda -lcudart
 
 gap_stats: gap_stats.cpp gap_common.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
@@ -58,7 +62,7 @@ gap_test_gpu: gap_test_gpu.cu gap_common.o gap_test_common.o sieve_small.o
 	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
 		$(CUDA_FLAGS) \
 		-I../CGBN/include \
-		$(filter-out -fopenmp, $(LDFLAGS))
+		$(LDFLAGS)
 
 benchmark: misc/benchmark.cpp modulo_search.o
 	$(CC) -o $@ $^ $(CFLAGS) -lprimesieve $(LDFLAGS) -I.
@@ -66,9 +70,7 @@ benchmark: misc/benchmark.cpp modulo_search.o
 benchmark_google: misc/benchmark_google.cpp modulo_search.o
 	$(CC) -o $@ $^ $(CFLAGS) -std=c++14 -lprimesieve -lbenchmark -lpthread -I.
 
-
-.PHONY: clean
-
+.PHONY: all clean
 
 clean:
-	rm -f $(OUT) gap_test_gpu *.o
+	rm -f $(OUT) *.o

@@ -156,7 +156,7 @@ def print_record_gaps(args, gaps):
             is_own_record = existing[3] == args.whoami
 
             if is_same and not is_own_record:
-                print("\tREDISCOVERED | {:70s} (old: {})".format(raw_data, existing))
+                print("\tREDISCOVERED | {:70s}\n\t         OLD | {})".format(raw_data, existing))
                 continue
 
             # If obvious not an improvement don't call parse(...)
@@ -179,6 +179,7 @@ def print_record_gaps(args, gaps):
                 if is_same and is_own_record:
                     own_records.append(raw_data)
                     ith = len(own_records)
+                    print(f"\tReplacing a personal record | {raw_data}\n\t{' '*30} | {existing}")
                     special = ith in (1, 2, 5, 10, 20, 50) or ith % 100 == 0
                     if not special:
                         continue
