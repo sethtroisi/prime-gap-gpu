@@ -36,11 +36,11 @@ using namespace std::chrono;
 
 
 // TODO figure out what to set here
-#define GRID_SIZE 64
-#define BLOCK_SIZE 32
+#define GRID_SIZE 1024
+#define BLOCK_SIZE 64
 
 
-// BIT_IS_BIT means 8x less GPU memory, faster transfers
+// BIT_IS_BIT means 8x less GPU memory, faster transfers, slightly slower compute
 // A very small percentage of factors get lost.
 // #define BIT_IS_BIT
 
@@ -58,15 +58,19 @@ void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NU
 }
 #define CUDA_CHECK(action) cuda_check(action, #action, __FILE__, __LINE__)
 
-/**
-__global__ void count_set_bits_in_array(char *array, uint64_t bytes) {
-    uint32_t set = 0;
-    for (size_t i = 0; i < bytes; i++) {
-        set += array[i] > 0;
-    }
-    printf("%u/%lu bytes are non zero\n", set, bytes);
+
+__device__ uint32_t mod2310(uint32_t n) {
+    // magic constant from "Division by Invariant Integers using Multiplication"
+    const uint32_t magic_2310 = 1903916239;
+    const int32_t shift = 10;
+    // mult.hi.u32 = upper 32 bits of u32, u32 multiplication
+    uint32_t q;
+    asm("mul.hi.u32 %0, %1, %2;" : "=r"(q) : "r"(n), "r"(magic_2310));
+    q >>= shift;
+    //assert( q == (m_temp / 2310) );
+    return n - q * 2310;
 }
-*/
+
 
 /** Called by host executed on device. */
 __global__ void method2_medium_primes_kernal(
@@ -89,7 +93,7 @@ __global__ void method2_medium_primes_kernal(
 
     uint32_t num_primes,
     uint32_t *primes,
-    uint32_t *remainders, // r = K mod p
+    // uint32_t *remainders, // r = K mod p
     int32_t *neg_inv_Ks,  // r^1 mod p
 
     uint32_t num_coprimes,
@@ -103,40 +107,40 @@ __global__ void method2_medium_primes_kernal(
     assert( gridDim.x == GRID_SIZE );
     assert( blockDim.x == BLOCK_SIZE );
 
-    int index = threadIdx.x + (blockIdx.x * BLOCK_SIZE);
-
     // TODO with block/thread splitting pi/coprime backwards
+    // uint32_t print_mult = 10000;
+    // uint32_t next_print = print_mult;
+    // uint32_t next_mult = 5 * print_mult;
 
-    uint32_t print_mult = 10000;
-    uint32_t next_print = print_mult;
-    uint32_t next_mult = 5 * print_mult;
+    uint32_t small_factors = 10;
 
-    uint32_t small_factors = 0;
+    uint32_t m_start_mod2310 = M_start % 2310;
 
-    for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
+    for (uint32_t pi = blockIdx.x; pi < num_primes; pi += GRID_SIZE) {
+    //for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
         const uint32_t prime = primes[pi];
-        const uint32_t base_r = remainders[pi];
+        //const uint32_t base_r = remainders[pi];
         const int32_t neg_inv_K = neg_inv_Ks[pi];
 
-        if (1) {
-            // as large as prime^2
-            uint64_t t = ((uint64_t) neg_inv_K) * base_r;
-            if (index == 0 && prime >= next_print) {
-                printf("\tGPU @ prime(%u): %u\n", pi, prime);
+        // {
+        //     // as large as prime^2
+        //     uint64_t t = ((uint64_t) neg_inv_K) * base_r;
+        //     if (index == 0 && prime >= next_print) {
+        //         printf("\tGPU @ prime(%u): %u\n", pi, prime);
 
-                if (next_print == next_mult) {
-                    print_mult *= 10;
-                    next_print = print_mult;
-                    next_mult = 5 * print_mult;
-                } else {
-                    next_print += print_mult;
-                }
-            }
-            assert(t % prime == (prime-1));
-            assert(base_r < prime);
-            assert(0 < neg_inv_K);
-            assert(neg_inv_K < prime);
-        }
+        //         if (next_print == next_mult) {
+        //             print_mult *= 10;
+        //             next_print = print_mult;
+        //             next_mult = 5 * print_mult;
+        //         } else {
+        //             next_print += print_mult;
+        //         }
+        //     }
+        //     assert(t % prime == (prime-1));
+        //     assert(base_r < prime);
+        //     assert(0 < neg_inv_K);
+        //     assert(neg_inv_K < prime);
+        // }
 
         // -M_start % p
         int64_t mi_0_shift = prime - (M_start % prime);
@@ -147,25 +151,31 @@ __global__ void method2_medium_primes_kernal(
         const uint8_t M_parity_check = M_start & 1;
         uint32_t shift = prime << 1;
 
-        // Find m*K = X, X in [L, R]
-        // NOTE: X is positive [0, SL]
-        for (size_t cxti = blockIdx.x; cxti < num_coprimes; cxti += GRID_SIZE) {
+        for (size_t cxti = threadIdx.x; cxti < num_coprimes; cxti += BLOCK_SIZE) {
+        //for (size_t cxti = blockIdx.x; cxti < num_coprimes; cxti += GRID_SIZE) {
             int64_t X = coprime_X_thread[cxti];
             // Safe from overflow as (SL * prime + prime) < int64
             int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
             mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
 
-            uint64_t mi = mi_0;
+            uint32_t mi = mi_0;
             for (; mi < M_inc; mi += shift) {
-                uint64_t m = M_start + mi;
-                uint32_t m_mod2310 = m % 2310;
+                // TODO if (...) continue code only makes GPU 10% faster
+                // Maybe replace with is_m_coprime will be a better check, given fast memory.
+
+
+                //uint64_t m = M_start + mi;
+                //uint32_t m_mod2310 = m % 2310;
+                uint32_t m_mod2310 = mod2310(m_start_mod2310 + mi);
 
                 // Filters ~80% or more of m where (m, D) != 1
                 if (!is_m_coprime2310[m_mod2310])
                     continue;
 
                 // After initial value this increases by (shift * K_mod2310) % 2310
-                uint32_t n_mod2310 = ((K_mod2310 * m_mod2310) + X) % 2310;
+                //uint32_t n_mod2310 = ((K_mod2310 * m_mod2310) + X) % 2310;
+                uint32_t n_mod2310 = mod2310((K_mod2310 * m_mod2310) + X);
+
                 if (!is_coprime2310[n_mod2310])
                     continue;
 
@@ -189,14 +199,11 @@ __global__ void method2_medium_primes_kernal(
     uint64_t t1 = clock64();
 
     // 4 is stats_per_thread.
+    int index = threadIdx.x + (blockIdx.x * BLOCK_SIZE);
     thread_stats[4 * index + 0] = t0;
     thread_stats[4 * index + 1] = t1;
     thread_stats[4 * index + 2] = small_factors;
     thread_stats[4 * index + 3] = index;
-
-    if (small_factors == 0 || ((index % 37 == 0) && small_factors > 100'00'000)) {
-        printf("\tGPU thread: %d -> %u factors\n", index, small_factors);
-    }
 }
 
 /**
@@ -250,7 +257,8 @@ class GPUSieve {
         // Cached prime stuff
         uint32_t num_primes;
         uint32_t *primes;
-        uint32_t *remainders; // r = K mod p
+        // Remainders isn't actually used!
+        // uint32_t *remainders; // r = K mod p
         int32_t *neg_inv_Ks;  // r^1 mod p
 
         // Maybe later? is_m_coprime
@@ -272,7 +280,7 @@ class GPUSieve {
             CUDA_CHECK(cudaFree(composite));
 
             CUDA_CHECK(cudaFree(primes));
-            CUDA_CHECK(cudaFree(remainders));
+            // CUDA_CHECK(cudaFree(remainders));
             CUDA_CHECK(cudaFree(neg_inv_Ks));
 
             CUDA_CHECK(cudaStreamDestroy(runner));
@@ -296,7 +304,7 @@ class GPUSieve {
 
             { // Compute prime stuff and copy over
                 vector<uint32_t> host_primes;
-                vector<uint32_t> host_remainders;
+                // vector<uint32_t> host_remainders;
                 vector<int32_t> host_neg_inv_Ks;
 
                 primesieve::iterator iter(prime_start);
@@ -310,7 +318,7 @@ class GPUSieve {
                     assert( (neg_inv_K * base_r) % prime == (prime-1) );
 
                     host_primes.push_back(prime);
-                    host_remainders.push_back(base_r);
+                    // host_remainders.push_back(base_r);
                     host_neg_inv_Ks.push_back(neg_inv_K);
                     num_primes += 1;
                 }
@@ -319,8 +327,8 @@ class GPUSieve {
                 CUDA_CHECK(cudaMallocAsync(&primes, bytes, runner));
                 CUDA_CHECK(cudaMemcpyAsync(primes, host_primes.data(), bytes, cudaMemcpyHostToDevice, runner));
 
-                CUDA_CHECK(cudaMallocAsync(&remainders, bytes, runner));
-                CUDA_CHECK(cudaMemcpyAsync(remainders, host_remainders.data(), bytes, cudaMemcpyHostToDevice, runner));
+                // CUDA_CHECK(cudaMallocAsync(&remainders, bytes, runner));
+                // CUDA_CHECK(cudaMemcpyAsync(remainders, host_remainders.data(), bytes, cudaMemcpyHostToDevice, runner));
 
                 CUDA_CHECK(cudaMallocAsync(&neg_inv_Ks, bytes, runner));
                 CUDA_CHECK(cudaMemcpyAsync(neg_inv_Ks, host_neg_inv_Ks.data(), bytes, cudaMemcpyHostToDevice, runner));
@@ -373,7 +381,7 @@ class GPUSieve {
             cudaStreamSynchronize(runner);
             auto T1 = high_resolution_clock::now();
             auto gpu_setup_ms = duration_cast<milliseconds>(T1 - T0).count();
-            cout << "GPU setup: " << gpu_setup_ms << " ms" << endl;
+            printf("GPU<<<%d,%d>>> setup: %lu ms\n", GRID_SIZE, BLOCK_SIZE, gpu_setup_ms);
         }
 
         void run_sieve(
@@ -402,7 +410,7 @@ class GPUSieve {
 
                     this->num_primes,
                     this->primes,
-                    this->remainders,
+                    // this->remainders,
                     this->neg_inv_Ks,
 
                     this->num_coprimes,
@@ -420,6 +428,7 @@ class GPUSieve {
             if (1) { // Read thread stats
                 CUDA_CHECK(cudaMemcpyAsync(host_thread_stats, thread_stats, thread_stats_bytes,
                            cudaMemcpyDeviceToHost, runner));
+                cudaStreamSynchronize(runner);
                 auto first_t0 = host_thread_stats[0];
                 for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
                     first_t0 = std::min(first_t0, host_thread_stats[stats_per_thread * ti + 0]);
@@ -431,8 +440,10 @@ class GPUSieve {
                     auto t1 = s[1];
                     auto small_factors = s[2];
                     auto verify = s[3];
-                    printf("\tt%-5lu | t0 offest = %ld | t1-t0 = %ld | factors: %ld\n",
-                            ti, t0 - first_t0, t1 - t0, small_factors);
+                    if (ti % 173 == 0) {
+                        printf("\tt%-5lu | t0 offset = %-13ld | t1-t0 = %-12ld | factors: %ld\n",
+                                ti, t0 - first_t0, t1 - t0, small_factors);
+                    }
                     assert(verify == ti);
                 }
             }
@@ -475,6 +486,8 @@ class GPUSieve {
                     assert( 0 < chunk_bytes && chunk_bytes <= segment_bytes );
                     assert( chunk_bytes == segment_bytes || last_mii == valid_m );
                     CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_start, chunk_bytes, cudaMemcpyDeviceToHost, runner));
+                    // TODO is this needed?
+                    cudaStreamSynchronize(runner);
                     composite_start += chunk_bytes;
 
                     // TODO could do something smart like build up chunks of dynamic bitset and commit them.

@@ -21,7 +21,7 @@ CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
 NVCC	= nvcc
 ARCH    = sm_61
-CUDA_FLAGS	= $(OPT) -arch=$(ARCH) -Xcompiler -Wall -Xcompiler -Werror -Xcompiler -fopenmp
+CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage -Xcompiler -Wall -Xcompiler -Werror -Xcompiler -fopenmp
 BITS    = 1024
 
 LDFLAGS	= -lgmp -lprimesieve
