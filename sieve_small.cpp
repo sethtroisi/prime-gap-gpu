@@ -1074,6 +1074,7 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
 
     const size_t count_coprime_sieve = caches.coprime_X.size();
 
+    // TODO using P+1 is faster, but not sure if worth CPU vs GPU trade-off
     const auto THRESHOLDS =
         calculate_thresholds_method2(config, count_coprime_sieve, valid_ms);
     const uint64_t SMALL_THRESHOLD = THRESHOLDS.first;
@@ -1238,7 +1239,7 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
 
 
     // Also run GPUSieve and see what happens
-    if (0) { // Medium Primes
+    if (1) { // Medium Primes
         auto gsieve = GPUSieve(config, K, caches, SMALL_THRESHOLD, MEDIUM_THRESHOLD);
         gsieve.run_sieve(config, config.mstart, config.minc, caches, composite);
     } else {

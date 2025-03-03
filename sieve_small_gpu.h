@@ -40,7 +40,9 @@ using namespace std::chrono;
 #define BLOCK_SIZE 32
 
 
-#define BIT_IS_BIT
+// BIT_IS_BIT means 8x less GPU memory, faster transfers
+// A very small percentage of factors get lost.
+// #define BIT_IS_BIT
 
 
 // support routines
@@ -68,6 +70,8 @@ __global__ void count_set_bits_in_array(char *array, uint64_t bytes) {
 
 /** Called by host executed on device. */
 __global__ void method2_medium_primes_kernal(
+    int64_t *thread_stats,
+
     /** Caches section **/
     char *is_m_coprime2310,
     char *is_coprime2310,
@@ -91,6 +95,8 @@ __global__ void method2_medium_primes_kernal(
     uint32_t num_coprimes,
     uint32_t *coprime_X_thread
 ) {
+    uint64_t t0 = clock64();
+
     // Indexing is hard for me
     // blockIdx.x / gridDim.x
     // threadIdx.x / blockDim.x
@@ -180,6 +186,14 @@ __global__ void method2_medium_primes_kernal(
         }
     }
 
+    uint64_t t1 = clock64();
+
+    // 4 is stats_per_thread.
+    thread_stats[4 * index + 0] = t0;
+    thread_stats[4 * index + 1] = t1;
+    thread_stats[4 * index + 2] = small_factors;
+    thread_stats[4 * index + 3] = index;
+
     if (small_factors == 0 || ((index % 37 == 0) && small_factors > 100'00'000)) {
         printf("\tGPU thread: %d -> %u factors\n", index, small_factors);
     }
@@ -219,6 +233,12 @@ class GPUSieve {
     public:
         cudaStream_t runner;
 
+        // GPU stats
+        const size_t   stats_per_thread = 4;
+        const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
+        int64_t  *host_thread_stats;
+        int64_t  *thread_stats;
+
         // Cache stuff
         uint32_t num_coprimes;
         uint32_t *coprime_X;
@@ -242,6 +262,9 @@ class GPUSieve {
 
         ~GPUSieve() {
             printf("\t~GPUSieve\n");
+            CUDA_CHECK(cudaFreeHost(host_thread_stats));
+            CUDA_CHECK(cudaFree(thread_stats));
+
             CUDA_CHECK(cudaFree(coprime_X));
             CUDA_CHECK(cudaFree(is_coprime2310));
             CUDA_CHECK(cudaFree(is_m_coprime2310));
@@ -301,8 +324,8 @@ class GPUSieve {
 
                 CUDA_CHECK(cudaMallocAsync(&neg_inv_Ks, bytes, runner));
                 CUDA_CHECK(cudaMemcpyAsync(neg_inv_Ks, host_neg_inv_Ks.data(), bytes, cudaMemcpyHostToDevice, runner));
-
-                // DO I NEED TO SYNC BEFORE MEMORY IS UNALLOCATED?
+                // After reading https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html#api-sync-behavior
+                // I believe memcpyAsync is only async for GPU and CPU is sync with respoct to the host.
             }
 
             num_coprimes = caches.coprime_X.size();
@@ -319,8 +342,6 @@ class GPUSieve {
                 for (size_t i = 0; i < 2310; i++) is_m_coprime2310_tmp[i] = caches.is_m_coprime2310[i];
                 CUDA_CHECK(cudaMallocAsync(&is_m_coprime2310, 2310, runner));
                 CUDA_CHECK(cudaMemcpyAsync(is_m_coprime2310, is_m_coprime2310_tmp, 2310, cudaMemcpyHostToDevice, runner));
-
-                // DO I NEED TO SYNC BEFORE MEMORY IS UNALLOCATED?
             }
 
             const size_t m_reindex_bytes = sizeof(int32_t) * caches.m_reindex.size();
@@ -335,9 +356,15 @@ class GPUSieve {
             CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
             CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
+            {
+                CUDA_CHECK(cudaMallocHost((void**) &host_thread_stats, thread_stats_bytes));
+                CUDA_CHECK(cudaMallocAsync(&thread_stats, thread_stats_bytes, runner));
+                CUDA_CHECK(cudaMemsetAsync(thread_stats, 0, thread_stats_bytes, runner));
+            }
+
             if (config.verbose >= 1) {
-                printf("\tGPUSieve(): malloced: 4x %d, %lu, %lu, 2x%d, %lu, composite: %lu MB\n",
-                        4*num_primes, X_bytes, X_bytes/2, 2310, m_reindex_bytes, composite_bytes / 1024 / 1024);
+                printf("\tGPUSieve(): malloced: primes: 3x %'d  composite: %lu MB\n",
+                        4*num_primes, composite_bytes / 1024 / 1024);
             }
 
             M_start   = config.mstart;
@@ -359,6 +386,8 @@ class GPUSieve {
             { // Run GPU Sieve!
                 auto T0 = high_resolution_clock::now();
                 method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+                    this->thread_stats,
+
                     this->is_m_coprime2310,
                     this->is_coprime2310,
                     // Maybe later? is_m_coprime
@@ -378,6 +407,7 @@ class GPUSieve {
 
                     this->num_coprimes,
                     this->coprime_X // TODO pass a portion of this or something IDK
+
                 );
 
                 cudaStreamSynchronize(runner);
@@ -385,6 +415,26 @@ class GPUSieve {
                 auto T1 = high_resolution_clock::now();
                 auto kernel_ms = duration_cast<milliseconds>(T1 - T0).count();
                 cout << "GPU sieve: " << kernel_ms << " ms" << endl;
+            }
+
+            if (1) { // Read thread stats
+                CUDA_CHECK(cudaMemcpyAsync(host_thread_stats, thread_stats, thread_stats_bytes,
+                           cudaMemcpyDeviceToHost, runner));
+                auto first_t0 = host_thread_stats[0];
+                for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
+                    first_t0 = std::min(first_t0, host_thread_stats[stats_per_thread * ti + 0]);
+                }
+
+                for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
+                    const auto s = host_thread_stats + (stats_per_thread * ti);
+                    auto t0 = s[0];
+                    auto t1 = s[1];
+                    auto small_factors = s[2];
+                    auto verify = s[3];
+                    printf("\tt%-5lu | t0 offest = %ld | t1-t0 = %ld | factors: %ld\n",
+                            ti, t0 - first_t0, t1 - t0, small_factors);
+                    assert(verify == ti);
+                }
             }
 
             if (1) { // Parse results back to composite.
@@ -413,9 +463,9 @@ class GPUSieve {
                 char* composite_start = composite;
                 for (size_t start_mii = 0; start_mii < valid_m; start_mii += segment_size) {
                     size_t last_mii = std::min(start_mii + segment_size, valid_m);
-                    if (config.verbose >= 2) {
-                        printf("\tCopying over mi [%lu, %lu)\n", start_mii, last_mii);
-                    }
+                    //if (config.verbose >= 3) {
+                    //    printf("\tCopying over mi [%lu, %lu)\n", start_mii, last_mii);
+                    //}
 
 #ifdef BIT_IS_BIT
                     size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char) / 8;
@@ -425,7 +475,6 @@ class GPUSieve {
                     assert( 0 < chunk_bytes && chunk_bytes <= segment_bytes );
                     assert( chunk_bytes == segment_bytes || last_mii == valid_m );
                     CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_start, chunk_bytes, cudaMemcpyDeviceToHost, runner));
-                    cudaStreamSynchronize(runner);
                     composite_start += chunk_bytes;
 
                     // TODO could do something smart like build up chunks of dynamic bitset and commit them.
