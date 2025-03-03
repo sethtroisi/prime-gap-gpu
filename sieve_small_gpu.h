@@ -388,6 +388,8 @@ class GPUSieve {
             }
 
             if (1) { // Parse results back to composite.
+                const uint32_t SL_PLUS1 = config.sieve_length + 1;
+
                 auto T0 = high_resolution_clock::now();
 
                 size_t found_factors = 0;
@@ -432,7 +434,9 @@ class GPUSieve {
                     for(size_t mii = start_mii; mii < last_mii; mii++) {
                         size_t offset = (mii - start_mii) * num_coprimes;
                         uint64_t m = M_start + caches.valid_mi[mii];
-                        const auto &x_reindex_m = caches.x_reindex_wheel[m % caches.x_reindex_wheel_size];
+                        const uint32_t m_mod_wheel = m % caches.x_reindex_wheel_size;
+                        // TODO test with and without &
+                        const auto x_reindex_m = caches.x_reindex_wheel.data() + ((m_mod_wheel) * SL_PLUS1);
                         size_t m_offset = mii * caches.composite_line_size;
 
                         for (size_t xi = 0; xi < num_coprimes; xi++, offset++) {

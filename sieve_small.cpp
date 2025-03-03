@@ -344,10 +344,10 @@ class Cached {
         // Note: Larger wheel eliminates more numbers but takes more space.
         // 6 (saves 2/3 memory), 30 (saves 11/15 memory)
         uint32_t x_reindex_wheel_size;
-        vector<uint16_t> x_reindex_wheel[METHOD2_WHEEL_MAX];
+        vector<uint16_t> x_reindex_wheel; // [x_reindex_wheel_size * SL]
         // x_unindex_wheel[j] = k, where x_reindex_wheel[coprime_X[k]] = j
-        vector<uint16_t> x_unindex_wheel[METHOD2_WHEEL_MAX];
-        vector<size_t> x_reindex_wheel_count;
+        vector<uint16_t> x_unindex_wheel // x_reindex_wheel_size * SL]
+        vector<size_t> x_reindex_wheel_count; // For stats and packed composite
 
         uint64_t composite_line_size;
 
@@ -450,10 +450,10 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
 
         // Start at m_wheel == 0 so that re_index_m_wheel == 1 (D=1) works.
 
+        x_reindex_wheel.resize(x_reindex_wheel_size * (SL+1), 0);
         for (size_t m_wheel = 1; m_wheel < x_reindex_wheel_size; m_wheel++) {
             if (gcd(x_reindex_wheel_size, m_wheel) > 1) continue;
 
-            x_reindex_wheel[m_wheel].resize(SL+1, 0);
 
             // m * K % wheel => m_wheel % wheel
             uint32_t mod_center = m_wheel * mpz_fdiv_ui(K, x_reindex_wheel_size);
@@ -466,7 +466,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                 if (is_offset_coprime[i] > 0) {
                     if (gcd(mod_center + i, x_reindex_wheel_size) == 1) {
                         coprime_count_wheel += 1;
-                        x_reindex_wheel[m_wheel][i] = coprime_count_wheel;
+                        x_reindex_wheel[m_wheel * (SL+1) + i] = coprime_count_wheel;
                         // i is offset, want to know that index in coprime_X
                         x_unindex_wheel[m_wheel].push_back(x_reindex[i] - 1);
                     }
@@ -488,7 +488,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
         for (const auto X: coprime_X) {
             size_t count = 0;
             for (size_t i = 0; i < x_reindex_wheel_size; i++) {
-                if (x_reindex_wheel[i].size() && x_reindex_wheel[i][X] > 0) {
+                if (x_reindex_wheel[i * (SL+1) + X] > 0) {
                     count += 1;
                 }
             }
@@ -618,9 +618,11 @@ std::unique_ptr<SieveOutput> save_unknowns(
         assert((signed)mii == caches.m_reindex[mi]);
 
         const size_t composite_index = mii * caches.composite_line_size;
-        const auto &x_reindex_m = caches.x_reindex_wheel[m % caches.x_reindex_wheel_size];
-        const auto &x_unindex_m = caches.x_unindex_wheel[m % caches.x_reindex_wheel_size];
-        assert(x_reindex_m.size() == (uint64_t) (SL + 1));
+        const uint32_t m_mod_wheel = m % caches.x_reindex_wheel_size;
+        // TODO test with and without &
+        const auto x_reindex_m = caches.x_reindex_wheel.data() + ((m_mod_wheel) * (SL+1));
+        //assert(x_reindex_m.size() == (uint64_t) (SL + 1));
+        const auto &x_unindex_m = caches.x_unindex_wheel[m_mod_wheel];
 
         int64_t found = 0;
         auto& deltas = output->unknowns[mii];
@@ -726,6 +728,8 @@ method2_stats method2_small_primes(const Config &config, method2_stats &stats,
     primesieve::iterator iter;
     uint64_t prime = 0;
 
+    // TODO test getting rid of all small prime code!
+
     while (prime <= SMALL_THRESHOLD) {
         // Handle primes up to (and 1 past) stats.next_mult
         std::vector<std::pair<uint32_t, uint32_t>> p_and_r;
@@ -760,8 +764,10 @@ method2_stats method2_small_primes(const Config &config, method2_stats &stats,
             int32_t mii = caches.m_reindex[mi];
             assert(mii >= 0);
 
-            uint64_t m = config.mstart + mi;
-            const auto &x_reindex_m = caches.x_reindex_wheel[m % x_reindex_wheel_size];
+            const uint64_t m = config.mstart + mi;
+            const uint64_t m_mod_wheel = m % x_reindex_wheel_size;
+            // TODO test with and without &
+            const auto &x_reindex_m = caches.x_reindex_wheel.data() + (m_mod_wheel * (SL+1));
             const uint64_t composite_index = mii * caches.composite_line_size;
 
             bool centerOdd = ((D & 1) == 0) && (m & 1);
@@ -899,6 +905,7 @@ void method2_medium_primes(const Config &config, method2_stats &stats,
      */
 
     const uint32_t SIEVE_LENGTH = config.sieve_length;
+    const uint32_t SL_PLUS1 = SIEVE_LENGTH + 1;
     assert(prime_end <= (size_t)std::numeric_limits<int32_t>::max());
     // Prime can be larger than int32, prime * SIEVE_LENGTH must not overflow int64
     assert(!__builtin_mul_overflow_p(SIEVE_LENGTH, 4 * prime_end, (int64_t) 0));
@@ -972,8 +979,8 @@ void method2_medium_primes(const Config &config, method2_stats &stats,
             for (; mi < M_inc; mi += shift) {
                 // NOTE: Addition of constant, shift % 2310, and condition subtraction is way slower.
                 // TODO: Maybe can do magic division constant on mi_0:
-                uint64_t m = M_start + mi;
-                uint32_t m_mod2310 = m % 2310;
+                const uint64_t m = M_start + mi;
+                const uint32_t m_mod2310 = m % 2310;
 
                 // Filters ~80% or more of m where (m, D) != 1
                 if (!caches.is_m_coprime2310[m_mod2310])
@@ -990,7 +997,8 @@ void method2_medium_primes(const Config &config, method2_stats &stats,
                 small_factors += 1;
 
                 // x_reindex_wheel_size divides 2310 so this is same as m % x_reindex_wheel_size
-                uint32_t xii = caches.x_reindex_wheel[m_mod2310 % x_reindex_wheel_size][X];
+                const uint32_t m_mod_wheel = m_mod2310 % x_reindex_wheel_size;
+                uint32_t xii = caches.x_reindex_wheel[m_mod_wheel * SL_PLUS1 + X];
 
                 assert(xii > 0);
 
@@ -1230,7 +1238,7 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
 
 
     // Also run GPUSieve and see what happens
-    if (1) { // Medium Primes
+    if (0) { // Medium Primes
         auto gsieve = GPUSieve(config, K, caches, SMALL_THRESHOLD, MEDIUM_THRESHOLD);
         gsieve.run_sieve(config, config.mstart, config.minc, caches, composite);
     } else {
