@@ -213,31 +213,32 @@ vector<float> get_record_gaps(const struct Config& config) {
 
     vector<float> records(records_size, GAP_INF);
 
-    DB db(config.gaps_db.c_str());
+    assert(false); // Disabled in develop_one brance so sqlite isn't needed
+    // DB db(config.gaps_db.c_str());
 
-    /* Create SQL statement */
-    char sql[] = "SELECT gapsize, merit FROM gaps";
-    char *zErrMsg = nullptr;
+    // /* Create SQL statement */
+    // char sql[] = "SELECT gapsize, merit FROM gaps";
+    // char *zErrMsg = nullptr;
 
-    /* Execute SQL statement */
-    int rc = sqlite3_exec(db.get_db(), sql, [](void* recs, int argc, char **argv, char **azColName)->int {
-        char *test;
-        int64_t gap = strtol(argv[0], &test, 10);
-        assert(test != argv[0] && *test == '\0');
-        assert(gap > 0 && gap < 30'000'000);
+    // /* Execute SQL statement */
+    // int rc = sqlite3_exec(db.get_db(), sql, [](void* recs, int argc, char **argv, char **azColName)->int {
+    //     char *test;
+    //     int64_t gap = strtol(argv[0], &test, 10);
+    //     assert(test != argv[0] && *test == '\0');
+    //     assert(gap > 0 && gap < 30'000'000);
 
-        auto *recs_vec = static_cast<vector<float>*>(recs);
-        if ((size_t)gap < recs_vec->size()) {
-            // Recover log(startprime)
-            (*recs_vec)[gap] = gap / strtof(argv[1], nullptr);
-        }
-        return 0;
-    }, (void*)&records, &zErrMsg);
+    //     auto *recs_vec = static_cast<vector<float>*>(recs);
+    //     if ((size_t)gap < recs_vec->size()) {
+    //         // Recover log(startprime)
+    //         (*recs_vec)[gap] = gap / strtof(argv[1], nullptr);
+    //     }
+    //     return 0;
+    // }, (void*)&records, &zErrMsg);
 
-    if( rc != SQLITE_OK ) {
-        printf("SQL error: %s\n", zErrMsg);
-        sqlite3_free(zErrMsg);
-    }
+    // if( rc != SQLITE_OK ) {
+    //     printf("SQL error: %s\n", zErrMsg);
+    //     sqlite3_free(zErrMsg);
+    // }
 
     return records;
 }
@@ -268,54 +269,58 @@ void load_possible_records(
 
 
 bool is_range_already_processed(const struct Config& config) {
-    DB db_helper(config.search_db.c_str());
-    sqlite3 *db = db_helper.get_db();
+    assert(false); // Disabled in develop_one brance so sqlite isn't needed
+    return 0;
+    // DB db_helper(config.search_db.c_str());
+    // sqlite3 *db = db_helper.get_db();
 
-    uint64_t hash = db_helper.config_hash(config);
-    char sql[200];
-    sprintf(sql, "SELECT count(*) FROM range WHERE rid = %ld and time_stats > 0", hash);
-    char *zErrMsg = nullptr;
+    // uint64_t hash = db_helper.config_hash(config);
+    // char sql[200];
+    // sprintf(sql, "SELECT count(*) FROM range WHERE rid = %ld and time_stats > 0", hash);
+    // char *zErrMsg = nullptr;
 
-    int count = 0;
-    int rc = sqlite3_exec(db, sql, [](void* data, int argc, char **argv, char **azColName)->int {
-        assert( argc == 1 );
-        int64_t test = strtol(argv[0], nullptr, 10);
-        assert(test >= 0 && test <= 1);
-        *static_cast<int*>(data) = test;
-        return 0;
-    }, &count, &zErrMsg);
+    // int count = 0;
+    // int rc = sqlite3_exec(db, sql, [](void* data, int argc, char **argv, char **azColName)->int {
+    //     assert( argc == 1 );
+    //     int64_t test = strtol(argv[0], nullptr, 10);
+    //     assert(test >= 0 && test <= 1);
+    //     *static_cast<int*>(data) = test;
+    //     return 0;
+    // }, &count, &zErrMsg);
 
-    if (rc != SQLITE_OK) {
-        printf("\nrange SELECT failed '%s' | %d: '%s'\n",
-            zErrMsg, rc, sqlite3_errmsg(db));
-        exit(1);
-    }
-    return count > 0;
+    // if (rc != SQLITE_OK) {
+    //     printf("\nrange SELECT failed '%s' | %d: '%s'\n",
+    //         zErrMsg, rc, sqlite3_errmsg(db));
+    //     exit(1);
+    // }
+    // return count > 0;
 }
 
 
 double get_range_time(const struct Config& config) {
-    DB db_helper(config.search_db.c_str());
-    sqlite3 *db = db_helper.get_db();
+    assert(false); // Disabled in develop_one brance so sqlite isn't needed
+    return 0;
+    // DB db_helper(config.search_db.c_str());
+    // sqlite3 *db = db_helper.get_db();
 
-    uint64_t hash = db_helper.config_hash(config);
-    char sql[200];
-    sprintf(sql, "SELECT time_sieve + time_stats FROM range WHERE rid = %ld and time_sieve > 0", hash);
-    char *zErrMsg = nullptr;
+    // uint64_t hash = db_helper.config_hash(config);
+    // char sql[200];
+    // sprintf(sql, "SELECT time_sieve + time_stats FROM range WHERE rid = %ld and time_sieve > 0", hash);
+    // char *zErrMsg = nullptr;
 
-    double time = 0;
-    int rc = sqlite3_exec(db, sql, [](void* data, int argc, char **argv, char **azColName)->int {
-        assert( argc == 1 );
-        *static_cast<double*>(data) = strtof(argv[0], nullptr);
-        return 0;
-    }, &time, &zErrMsg);
+    // double time = 0;
+    // int rc = sqlite3_exec(db, sql, [](void* data, int argc, char **argv, char **azColName)->int {
+    //     assert( argc == 1 );
+    //     *static_cast<double*>(data) = strtof(argv[0], nullptr);
+    //     return 0;
+    // }, &time, &zErrMsg);
 
-    if (rc != SQLITE_OK) {
-        printf("\nrange SELECT failed '%s' | %d: '%s'\n",
-            zErrMsg, rc, sqlite3_errmsg(db));
-    }
+    // if (rc != SQLITE_OK) {
+    //     printf("\nrange SELECT failed '%s' | %d: '%s'\n",
+    //         zErrMsg, rc, sqlite3_errmsg(db));
+    // }
 
-    return time;
+    // return time;
 }
 
 
@@ -332,200 +337,201 @@ void store_stats(
 
     assert( !is_range_already_processed(config) );
 
-    DB db_helper(config.search_db.c_str());
-    sqlite3 *db = db_helper.get_db();
-    // Wait up to 60s to try and commit these records (range is most important)
-    sqlite3_busy_timeout(db, 60'000);
+    assert(false); // Disabled in develop_one brance so sqlite isn't needed
+    // DB db_helper(config.search_db.c_str());
+    // sqlite3 *db = db_helper.get_db();
+    // // Wait up to 60s to try and commit these records (range is most important)
+    // sqlite3_busy_timeout(db, 60'000);
 
-    char *zErrMsg = nullptr;
-    if (sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg) != SQLITE_OK) {
-        printf("BEGIN TRANSACTION failed: %s\n", zErrMsg);
-        exit(1);
-    }
+    // char *zErrMsg = nullptr;
+    // if (sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg) != SQLITE_OK) {
+    //     printf("BEGIN TRANSACTION failed: %s\n", zErrMsg);
+    //     exit(1);
+    // }
 
-    const uint64_t rid = db_helper.config_hash(config);
-    const size_t num_rows = M_stats.size();
-    char sSQL[500];
-    sprintf(sSQL,
-        "INSERT INTO range(rid, P,D, m_start,m_inc,"
-                          "sieve_length,max_prime,"
-                          "min_merit,"
-                          "num_m,"
-                          "time_stats)"
-        "VALUES(%ld,  %d,%d, %ld,%ld,"
-                "%d,%ld,  %.3f,"
-                "%ld, %.2f)"
-        "ON CONFLICT(rid) DO UPDATE SET time_stats=%.2f",
-            rid,  config.p, config.d, config.mstart, config.minc,
-            config.sieve_length, config.max_prime,
-            config.min_merit,
-            num_rows,
-            time_stats, time_stats);
+    // const uint64_t rid = db_helper.config_hash(config);
+    // const size_t num_rows = M_stats.size();
+    // char sSQL[500];
+    // sprintf(sSQL,
+    //     "INSERT INTO range(rid, P,D, m_start,m_inc,"
+    //                       "sieve_length,max_prime,"
+    //                       "min_merit,"
+    //                       "num_m,"
+    //                       "time_stats)"
+    //     "VALUES(%ld,  %d,%d, %ld,%ld,"
+    //             "%d,%ld,  %.3f,"
+    //             "%ld, %.2f)"
+    //     "ON CONFLICT(rid) DO UPDATE SET time_stats=%.2f",
+    //         rid,  config.p, config.d, config.mstart, config.minc,
+    //         config.sieve_length, config.max_prime,
+    //         config.min_merit,
+    //         num_rows,
+    //         time_stats, time_stats);
 
-    {
-        int rc = sqlite3_exec(db, sSQL, nullptr, nullptr, &zErrMsg);
-        if (rc != SQLITE_OK) {
-            printf("\nrange INSERT/UPDATE failed %d: %s\n",
-                   rc, sqlite3_errmsg(db));
-            exit(1);
-        }
-    }
+    // {
+    //     int rc = sqlite3_exec(db, sSQL, nullptr, nullptr, &zErrMsg);
+    //     if (rc != SQLITE_OK) {
+    //         printf("\nrange INSERT/UPDATE failed %d: %s\n",
+    //                rc, sqlite3_errmsg(db));
+    //         exit(1);
+    //     }
+    // }
 
-#define BIND_OR_ERROR(func, stmt, index, value)                             \
-    if (func(stmt, index, value) != SQLITE_OK) {                            \
-        printf("Failed to bind param %d: %s\n", index, sqlite3_errmsg(db)); \
-        break;                                                              \
-    }
+// #define BIND_OR_ERROR(func, stmt, index, value)
+    // if (func(stmt, index, value) != SQLITE_OK) {
+    //     printf("Failed to bind param %d: %s\n", index, sqlite3_errmsg(db));
+    //     break;
+    // }
 
-    /* Create SQL statement to INSERT into range_stats. */
-    char insert_range_stats[] = (
-        "INSERT OR IGNORE INTO range_stats(rid, gap, prob_combined, prob_low_side, prob_high_side)"
-        " VALUES(?,?, ?,?,?)"
-    );
-    sqlite3_stmt *insert_range_stmt;
-    {
-        /* Prepare SQL statement */
-        int rc = sqlite3_prepare_v2(db, insert_range_stats, -1, &insert_range_stmt, nullptr);
-        if (rc != SQLITE_OK) {
-            printf("Could not prepare statement: '%s'\n", insert_range_stats);
-            exit(1);
-        }
-    }
+    // /* Create SQL statement to INSERT into range_stats. */
+    // char insert_range_stats[] = (
+    //     "INSERT OR IGNORE INTO range_stats(rid, gap, prob_combined, prob_low_side, prob_high_side)"
+    //     " VALUES(?,?, ?,?,?)"
+    // );
+    // sqlite3_stmt *insert_range_stmt;
+    // {
+    //     /* Prepare SQL statement */
+    //     int rc = sqlite3_prepare_v2(db, insert_range_stats, -1, &insert_range_stmt, nullptr);
+    //     if (rc != SQLITE_OK) {
+    //         printf("Could not prepare statement: '%s'\n", insert_range_stats);
+    //         exit(1);
+    //     }
+    // }
 
-    assert( prob_gap_norm.size() == prob_gap_prev.size() );
-    assert( prob_gap_norm.size() == prob_gap_next.size() );
-    size_t skipped_gap_stats = 0;
-    for (int g = (int) prob_gap_norm.size() - 1; g >= 0; g--) {
-        if (prob_gap_norm[g] < 1e-10 &&
-            prob_gap_prev[g]  < 1e-10 &&
-            prob_gap_next[g] < 1e-10) {
+    // assert( prob_gap_norm.size() == prob_gap_prev.size() );
+    // assert( prob_gap_norm.size() == prob_gap_next.size() );
+    // size_t skipped_gap_stats = 0;
+    // for (int g = (int) prob_gap_norm.size() - 1; g >= 0; g--) {
+    //     if (prob_gap_norm[g] < 1e-10 &&
+    //         prob_gap_prev[g]  < 1e-10 &&
+    //         prob_gap_next[g] < 1e-10) {
 
-            // All skipped gaps are summed at prob[0]
-            prob_gap_norm[0] += prob_gap_norm[g];
-            prob_gap_prev[0]  += prob_gap_prev[g];
-            prob_gap_next[0] += prob_gap_next[g];
-            skipped_gap_stats += 1;
-            continue;
-        }
+    //         // All skipped gaps are summed at prob[0]
+    //         prob_gap_norm[0] += prob_gap_norm[g];
+    //         prob_gap_prev[0]  += prob_gap_prev[g];
+    //         prob_gap_next[0] += prob_gap_next[g];
+    //         skipped_gap_stats += 1;
+    //         continue;
+    //     }
 
-        BIND_OR_ERROR(sqlite3_bind_int64, insert_range_stmt, 1, rid);
+    //     BIND_OR_ERROR(sqlite3_bind_int64, insert_range_stmt, 1, rid);
 
-        BIND_OR_ERROR(sqlite3_bind_int,    insert_range_stmt, 2, g);
-        BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 3, prob_gap_norm[g]);
-        BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 4, prob_gap_prev[g]);
-        BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 5, prob_gap_next[g]);
+    //     BIND_OR_ERROR(sqlite3_bind_int,    insert_range_stmt, 2, g);
+    //     BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 3, prob_gap_norm[g]);
+    //     BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 4, prob_gap_prev[g]);
+    //     BIND_OR_ERROR(sqlite3_bind_double, insert_range_stmt, 5, prob_gap_next[g]);
 
-        int rc = sqlite3_step(insert_range_stmt);
-        if (rc != SQLITE_DONE) {
-            printf("\nrange_stats insert failed (%d): %d: %s\n", g, rc, sqlite3_errmsg(db));
-            break;
-        }
+    //     int rc = sqlite3_step(insert_range_stmt);
+    //     if (rc != SQLITE_DONE) {
+    //         printf("\nrange_stats insert failed (%d): %d: %s\n", g, rc, sqlite3_errmsg(db));
+    //         break;
+    //     }
 
-        if (sqlite3_reset(insert_range_stmt) != SQLITE_OK) {
-            printf("Failed to reset statement\n");
-        }
+    //     if (sqlite3_reset(insert_range_stmt) != SQLITE_OK) {
+    //         printf("Failed to reset statement\n");
+    //     }
 
-        if (sqlite3_clear_bindings(insert_range_stmt) != SQLITE_OK) {
-            printf("Failed to clear bindings\n");
-        }
-    }
+    //     if (sqlite3_clear_bindings(insert_range_stmt) != SQLITE_OK) {
+    //         printf("Failed to clear bindings\n");
+    //     }
+    // }
 
-    if (config.verbose >= 0) {
-        printf("Saved %ld rows to 'range_stats' table\n", prob_gap_norm.size() - skipped_gap_stats);
-    }
+    // if (config.verbose >= 0) {
+    //     printf("Saved %ld rows to 'range_stats' table\n", prob_gap_norm.size() - skipped_gap_stats);
+    // }
 
-    /* Create SQL statement to INSERT into m_stats. */
-    // NOTE: IGNORE so that can rerun with different max-prime/sieve-length
-    char insert_m_stats[] = (
-            "INSERT OR IGNORE INTO m_stats"
-            "(rid, P, D, m, "
-            " prob_record, prob_missing, prob_merit,"
-            " e_gap_next, e_gap_prev)"
-            "VALUES"
-            "(?, ?, ?, ?,"
-            " ?, ?, ?,"
-            " ?, ?)"
-            );
+    // /* Create SQL statement to INSERT into m_stats. */
+    // // NOTE: IGNORE so that can rerun with different max-prime/sieve-length
+    // char insert_m_stats[] = (
+    //         "INSERT OR IGNORE INTO m_stats"
+    //         "(rid, P, D, m, "
+    //         " prob_record, prob_missing, prob_merit,"
+    //         " e_gap_next, e_gap_prev)"
+    //         "VALUES"
+    //         "(?, ?, ?, ?,"
+    //         " ?, ?, ?,"
+    //         " ?, ?)"
+    //         );
 
-    sqlite3_stmt *stmt;
-    {
-        /* Prepare SQL statement */
-        int rc = sqlite3_prepare_v2(db, insert_m_stats, -1, &stmt, nullptr);
-        if (rc != SQLITE_OK) {
-            printf("Could not prepare statement: '%s'\n", insert_m_stats);
-            exit(1);
-        }
-    }
+    // sqlite3_stmt *stmt;
+    // {
+    //     /* Prepare SQL statement */
+    //     int rc = sqlite3_prepare_v2(db, insert_m_stats, -1, &stmt, nullptr);
+    //     if (rc != SQLITE_OK) {
+    //         printf("Could not prepare statement: '%s'\n", insert_m_stats);
+    //         exit(1);
+    //     }
+    // }
 
-    if (config.verbose >= 2) {
-        printf("\n");
-    }
+    // if (config.verbose >= 2) {
+    //     printf("\n");
+    // }
 
-    size_t row_i = 0;
-    for (uint64_t mi : valid_mi) {
-        uint64_t m = config.mstart + mi;
-        ProbM &stats = M_stats[mi];
+    // size_t row_i = 0;
+    // for (uint64_t mi : valid_mi) {
+    //     uint64_t m = config.mstart + mi;
+    //     ProbM &stats = M_stats[mi];
 
-        float e_next = stats.expected_gap_next;
-        float e_prev = stats.expected_gap_prev;
+    //     float e_next = stats.expected_gap_next;
+    //     float e_prev = stats.expected_gap_prev;
 
-        size_t r = ++row_i;
-        if (config.verbose >= 2 && (
-                    (r <= 2) ||
-                    (r <= 200 && r % 100 == 0) ||
-                    (r <= 2000 && r % 1000 == 0) ||
-                    (r <= 20000 && r % 10000 == 0) ||
-                    (r <= 200000 && r % 100000 == 0) ||
-                    (r % 1000000 == 0) ||
-                    (r == num_rows))) {
-            printf("Saving Row: %6ld/%ld %6ld: %.1f, %.1f | R: %.1e M: %.1e HM(%.1f): %.1e\n",
-                    r, num_rows, m,
-                    e_next, e_prev,
-                    stats.record, stats.is_missing_gap,
-                    config.min_merit, stats.highmerit);
-        }
+    //     size_t r = ++row_i;
+    //     if (config.verbose >= 2 && (
+    //                 (r <= 2) ||
+    //                 (r <= 200 && r % 100 == 0) ||
+    //                 (r <= 2000 && r % 1000 == 0) ||
+    //                 (r <= 20000 && r % 10000 == 0) ||
+    //                 (r <= 200000 && r % 100000 == 0) ||
+    //                 (r % 1000000 == 0) ||
+    //                 (r == num_rows))) {
+    //         printf("Saving Row: %6ld/%ld %6ld: %.1f, %.1f | R: %.1e M: %.1e HM(%.1f): %.1e\n",
+    //                 r, num_rows, m,
+    //                 e_next, e_prev,
+    //                 stats.record, stats.is_missing_gap,
+    //                 config.min_merit, stats.highmerit);
+    //     }
 
-        BIND_OR_ERROR(sqlite3_bind_int64, stmt, 1, rid);
+    //     BIND_OR_ERROR(sqlite3_bind_int64, stmt, 1, rid);
 
-        // P, D, m
-        BIND_OR_ERROR(sqlite3_bind_int, stmt, 2, config.p);
-        BIND_OR_ERROR(sqlite3_bind_int, stmt, 3, config.d);
-        BIND_OR_ERROR(sqlite3_bind_int64, stmt, 4, m);
+    //     // P, D, m
+    //     BIND_OR_ERROR(sqlite3_bind_int, stmt, 2, config.p);
+    //     BIND_OR_ERROR(sqlite3_bind_int, stmt, 3, config.d);
+    //     BIND_OR_ERROR(sqlite3_bind_int64, stmt, 4, m);
 
-        // prob_record, prob_missing, prob_merit
-        BIND_OR_ERROR(sqlite3_bind_double, stmt, 5, stats.record);
-        BIND_OR_ERROR(sqlite3_bind_double, stmt, 6, stats.is_missing_gap);
-        BIND_OR_ERROR(sqlite3_bind_double, stmt, 7, stats.highmerit);
+    //     // prob_record, prob_missing, prob_merit
+    //     BIND_OR_ERROR(sqlite3_bind_double, stmt, 5, stats.record);
+    //     BIND_OR_ERROR(sqlite3_bind_double, stmt, 6, stats.is_missing_gap);
+    //     BIND_OR_ERROR(sqlite3_bind_double, stmt, 7, stats.highmerit);
 
-        // e_next, e_prev
-        BIND_OR_ERROR(sqlite3_bind_double, stmt, 8, e_next);
-        BIND_OR_ERROR(sqlite3_bind_double, stmt, 9, e_prev);
+    //     // e_next, e_prev
+    //     BIND_OR_ERROR(sqlite3_bind_double, stmt, 8, e_next);
+    //     BIND_OR_ERROR(sqlite3_bind_double, stmt, 9, e_prev);
 
-        int rc = sqlite3_step(stmt);
-        if (rc != SQLITE_DONE) {
-            printf("\nm_stats insert failed %ld: (%d, %d, %ld): %d: %s\n",
-                row_i, config.p, config.d, m, rc, sqlite3_errmsg(db));
-            break;
-        }
+    //     int rc = sqlite3_step(stmt);
+    //     if (rc != SQLITE_DONE) {
+    //         printf("\nm_stats insert failed %ld: (%d, %d, %ld): %d: %s\n",
+    //             row_i, config.p, config.d, m, rc, sqlite3_errmsg(db));
+    //         break;
+    //     }
 
-        if (sqlite3_reset(stmt) != SQLITE_OK) {
-            printf("Failed to reset statement\n");
-        }
+    //     if (sqlite3_reset(stmt) != SQLITE_OK) {
+    //         printf("Failed to reset statement\n");
+    //     }
 
-        if (sqlite3_clear_bindings(stmt) != SQLITE_OK) {
-            printf("Failed to clear bindings\n");
-        }
-    }
+    //     if (sqlite3_clear_bindings(stmt) != SQLITE_OK) {
+    //         printf("Failed to clear bindings\n");
+    //     }
+    // }
 
-    if (sqlite3_exec(db, "END TRANSACTION", nullptr, nullptr, &zErrMsg) != SQLITE_OK) {
-        printf("END TRANSACTION failed: %s\n", zErrMsg);
-        exit(1);
-    }
+    // if (sqlite3_exec(db, "END TRANSACTION", nullptr, nullptr, &zErrMsg) != SQLITE_OK) {
+    //     printf("END TRANSACTION failed: %s\n", zErrMsg);
+    //     exit(1);
+    // }
 
-    if (config.verbose >= 0) {
-        printf("Saved %ld rows to 'm_stats' table\n",
-                num_rows);
-    }
+    // if (config.verbose >= 0) {
+    //     printf("Saved %ld rows to 'm_stats' table\n",
+    //             num_rows);
+    // }
 }
 
 
