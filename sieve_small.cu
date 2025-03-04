@@ -51,8 +51,9 @@ using namespace std::chrono;
 
 // BIT_IS_BIT means 8x less GPU memory, faster transfers but, slightly slower compute
 // A very small percentage of factors get lost.
-#define BIT_IS_BIT
+// #define BIT_IS_BIT
 
+const size_t COPRIME_PER = 32;
 
 // support routines
 void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
@@ -105,8 +106,8 @@ __global__ void method2_medium_primes_kernal(
     // uint32_t *remainders, // r = K mod p
     int32_t *neg_inv_Ks,  // r^1 mod p
 
-    uint32_t num_coprimes,
-    uint32_t *coprime_X_thread
+    uint32_t *coprime_X,
+    uint32_t coprime_X0
 ) {
     uint64_t t0 = clock64();
 
@@ -125,7 +126,16 @@ __global__ void method2_medium_primes_kernal(
 
     uint32_t m_start_mod2310 = M_start % 2310;
 
-    for (uint32_t pi = blockIdx.x; pi < num_primes; pi += GRID_SIZE) {
+    assert( BLOCK_SIZE == 64 );
+    assert( COPRIME_PER == 32 );
+    uint32_t pi_0 = (blockIdx.x << 1) + (threadIdx.x & 1);
+    // 32 coprime_X0 starting with coprime_X0
+    size_t cxti = coprime_X0 + (threadIdx.x >> 1);
+#ifdef BIT_IS_BIT
+    char index_bit = 1 << (cxti & 7);
+#endif  // BIT_IS_BIT
+
+    for (uint32_t pi = pi_0; pi < num_primes; pi += GRID_SIZE) {
     //for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
         const uint32_t prime = primes[pi];
         //const uint32_t base_r = remainders[pi];
@@ -160,9 +170,10 @@ __global__ void method2_medium_primes_kernal(
         const uint8_t M_parity_check = M_start & 1;
         uint32_t shift = prime << 1;
 
-        for (size_t cxti = threadIdx.x; cxti < num_coprimes; cxti += BLOCK_SIZE) {
+        //for (size_t cxti = threadIdx.x; cxti < num_coprimes; cxti += BLOCK_SIZE) {
         //for (size_t cxti = blockIdx.x; cxti < num_coprimes; cxti += GRID_SIZE) {
-            int64_t X = coprime_X_thread[cxti];
+        {
+            int64_t X = coprime_X[cxti];
             // Safe from overflow as (SL * prime + prime) < int64
             int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
             mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
@@ -194,10 +205,11 @@ __global__ void method2_medium_primes_kernal(
                 if (mii < 0)
                     continue;
 
-                size_t index = (size_t) mii * num_coprimes + cxti;
 #ifdef BIT_IS_BIT
-                composite[index >> 3] |= 1 << (index&7);
+                // TODO 1<<(index&7) this could be extracted to the top to save a few operations
+                composite[(mii << 2) + (cxti >> 3)] |= index_bit;
 #else
+                size_t index = (size_t) (mii << 5) + cxti;
                 composite[index] = true;
 #endif  // BIT_IS_BIT
                 small_factors += 1;
@@ -319,10 +331,10 @@ class Cached {
 
 
         // X which are coprime to K
-        vector<uint32_t> coprime_X;
+        vector<uint16_t> coprime_X;
         // reindex composite[m][X] for composite[m_reindex[m]][x_reindex[X]]
         // Special 0'th entry stands for all not coprime
-        vector<uint32_t> x_reindex;
+        //vector<uint32_t> x_reindex;
 
         uint64_t composite_line_size;
 
@@ -358,7 +370,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
         valid_ms = valid_mi.size();
 
         // Includes 0
-        x_reindex.resize(SL+1, 0);
+        //x_reindex.resize(SL+1, 0);
 
         // reindex composite[m][i] using coprime_X
 
@@ -396,7 +408,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                 if (is_offset_coprime[X] > 0) {
                     coprime_X.push_back(X);
                     coprime_count += 1;
-                    x_reindex[X] = coprime_count;
+                    //x_reindex[X] = coprime_count;
                     //printf("\tcoprime(%lu) = %lu\n", coprime_count, X);
                 }
             }
@@ -560,8 +572,6 @@ std::unique_ptr<SieveOutput> save_unknowns(
 */
 
 GPUSieve::GPUSieve(const struct Config& config) {
-    // TODO gpu_sieve, m_start, coprime_X, m_inc, unknown_X0, unknowns, max_X
-
     // ----- Sieve stats & Merit Stuff
     const double K_log = prob_prime_and_stats(config, K);
     const double N_log = K_log + log(config.mstart);
@@ -581,6 +591,18 @@ GPUSieve::GPUSieve(const struct Config& config) {
         printf("\tcoprime i:     %lu / %u", count_coprime_sieve, config.sieve_length);
     }
 
+    { // Output setup
+        // TODO any other variables?
+        M_start       = config.mstart;
+        M_start_check = config.mstart;
+        K_mod2310 = caches.K_mod2310;
+        m_inc = caches.valid_mi;
+        coprime_X = caches.coprime_X;
+        unknown_X0 = 0;
+        max_X = coprime_X[unknown_X0 + COPRIME_PER - 1];
+        unknowns.resize(valid_ms, 0);
+    }
+
     { // GPU Setup part
         auto T0 = high_resolution_clock::now();
 
@@ -594,7 +616,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
             // vector<uint32_t> host_remainders;
             vector<int32_t> host_neg_inv_Ks;
 
-            primesieve::iterator iter(2); // Ignore 2 which is weird
+            primesieve::iterator iter(3); // Ignore 2 which is weird
             uint32_t prime = iter.next_prime();
             assert( prime == 3 );
             num_primes = 0;
@@ -652,12 +674,11 @@ GPUSieve::GPUSieve(const struct Config& config) {
         }
 
 #ifdef BIT_IS_BIT
-        composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms / 8 + 1;
+        composite_bytes = sizeof(char) * COPRIME_PER * caches.valid_ms / 8 + 1;
 #else
-        composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms;
+        composite_bytes = sizeof(char) * COPRIME_PER * caches.valid_ms;
 #endif  // BIT_IS_BIT
         CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
-        CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
         {
             CUDA_CHECK(cudaMallocHost((void**) &host_thread_stats, thread_stats_bytes));
@@ -665,7 +686,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
             CUDA_CHECK(cudaMemsetAsync(thread_stats, 0, thread_stats_bytes, runner));
         }
 
-        host_composite_bytes = sizeof(char) * composite_segment_size * num_coprimes;
+        host_composite_bytes = sizeof(char) * composite_segment_size * COPRIME_PER;
 #ifdef BIT_IS_BIT
         assert( composite_segment_size % 8 == 0 ); // needs to be true for segment_bytes to work
         host_composite_bytes /= 8;
@@ -676,9 +697,6 @@ GPUSieve::GPUSieve(const struct Config& config) {
             printf("\tGPUSieve(): malloced: primes: 3x %'d  composite: %lu MB + %lu MB\n",
                     4*num_primes, composite_bytes / 1024 / 1024, host_composite_bytes / 1024 / 1024);
         }
-
-        M_start   = config.mstart;
-        K_mod2310 = caches.K_mod2310;
 
         // TODO move reloading this to update or run
         assert( caches.m_reindex.size() == config.minc );
@@ -719,6 +737,14 @@ void GPUSieve::update(const struct Config& new_config) {
     // Caches.m_reindex
     // Caches.valid_mi
     // Caches.valid_ms
+
+    // TODO how to make sure gap_test_gpu doesn't change this
+    unknown_X0 += COPRIME_PER;
+    if (unknown_X0 + COPRIME_PER > this->num_coprimes) {
+        printf("Partial num_coprimes is not handled. use larger sieve_length?\n");
+        printf("But also you should never be here. TODO clean up this comment\n");
+        assert(false);
+    }
 }
 
 void GPUSieve::run(const struct Config& config) {
@@ -734,8 +760,10 @@ void GPUSieve::run(const struct Config& config) {
 
     assert( M_start == this->M_start );
 
+    assert( unknown_X0 + COPRIME_PER <= this->num_coprimes );
     { // Run GPU Sieve!
         auto T0 = high_resolution_clock::now();
+        CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
         method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
             this->thread_stats,
 
@@ -756,9 +784,9 @@ void GPUSieve::run(const struct Config& config) {
             // this->remainders,
             this->neg_inv_Ks,
 
-            this->num_coprimes,
-            this->test_X // TODO pass a portion of this or something IDK
+            this->test_X, // TODO pass a portion of this or something IDK
 
+            this->unknown_X0
         );
 
         cudaStreamSynchronize(runner);
@@ -809,9 +837,9 @@ void GPUSieve::run(const struct Config& config) {
             //}
 
 #ifdef BIT_IS_BIT
-            size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char) / 8;
+            size_t chunk_bytes = (last_mii - start_mii) * COPRIME_PER * sizeof(char) / 8;
 #else
-            size_t chunk_bytes = (last_mii - start_mii) * num_coprimes * sizeof(char);
+            size_t chunk_bytes = (last_mii - start_mii) * COPRIME_PER * sizeof(char);
 #endif  // BIT_IS_BIT
             assert( 0 < chunk_bytes && chunk_bytes <= host_composite_bytes );
             assert( chunk_bytes == host_composite_bytes || last_mii == valid_m );
@@ -820,41 +848,32 @@ void GPUSieve::run(const struct Config& config) {
             cudaStreamSynchronize(runner);
             composite_start += chunk_bytes;
 
-            // TODO what would it take to use composite directly
-            // so this could just be a memset?
-            // TODO could do something smart like build up chunks of dynamic bitset and commit them.
-            /**
             size_t had_factor = 0;
-            #pragma omp parallel for schedule(static, 8) num_threads(config.threads) reduction(+:had_factor)
+            #pragma omp parallel for schedule(static, 32) num_threads(config.threads) reduction(+:had_factor)
             for(size_t mii = start_mii; mii < last_mii; mii++) {
-                size_t offset = (mii - start_mii) * num_coprimes;
-                uint64_t m = M_start + caches.valid_mi[mii];
-                const uint32_t m_mod_wheel = m % caches.x_reindex_wheel_size;
-                // TODO test with and without &
-                const auto x_reindex_m = caches.x_reindex_wheel.data() + ((m_mod_wheel) * SL_PLUS1);
-                size_t m_offset = mii * caches.composite_line_size;
+                size_t offset = (mii - start_mii) * COPRIME_PER;
+                uint64_t m = M_start + m_inc[mii];
 
-                for (size_t xi = 0; xi < num_coprimes; xi++, offset++) {
-                    // if [mii][xi] is composite
+                uint32_t unknown = 0;
 #ifdef BIT_IS_BIT
-                    if (host_composite[offset >> 3] & (1 << (offset & 7))) {
+                // JOIN 4 chars
+                size_t t = offset >> 3;
+                unknown = ( host_composite[t] |
+                           (host_composite[t+1] << 8) |
+                           (host_composite[t+2] << 16) |
+                           (host_composite[t+3] << 24) );
 #else
-                    if (host_composite[offset]) {
-#endif  // BIT_IS_BIT
-                        had_factor += 1;
-                        auto X = caches.coprime_X[xi];
-                        auto xii = x_reindex_m[X];
-                        if (xii > 0) {
-                            output_composite[m_offset + xii] = 1;
-                        }
-                    }
+                for (size_t xi = 0; xi < COPRIME_PER; xi++, offset++) {
+                    unknown |= (host_composite[offset + xi] > 0) << xi;
                 }
+#endif  // BIT_IS_BIT
+                unknowns[mii] = unknown;
+                had_factor += __builtin_popcountl(unknown);
             }
             if (config.verbose >= 3) {
                 printf("\tmi [%lu, %lu) -> %lu factors\n", start_mii, last_mii, had_factor);
             }
             found_factors += had_factor;
-            */
         }
 
         //size_t after_factors =

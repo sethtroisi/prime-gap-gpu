@@ -41,7 +41,7 @@ class GPUSieve {
 
         uint64_t M_start;
         // mi for m being considered, set to -1 to remove a values
-        vector<int32_t> m_inc;
+        vector<uint32_t> m_inc;
 
         /**
          * 32 bits of "unknowns"

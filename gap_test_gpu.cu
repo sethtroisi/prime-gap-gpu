@@ -419,6 +419,8 @@ void run_sieve_thread(void) {
             to_sieve->config.verbose -= 3;
             to_sieve->state = SieveHolder::SIEVING;
             auto sieve = std::make_unique<GPUSieve>(to_sieve->config);
+            sieve->run(to_sieve->config);
+
             to_sieve->config.verbose += 3;
 
             auto s_stop_t = high_resolution_clock::now();
