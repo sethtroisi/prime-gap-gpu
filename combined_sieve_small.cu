@@ -19,7 +19,7 @@
 #include <gmp.h>
 
 #include "gap_common.h"
-#include "sieve_small.h"
+//#include "sieve_small.h"
 
 using std::cout;
 using std::endl;
@@ -69,6 +69,6 @@ int main(int argc, char* argv[]) {
     if (config.method1) {
         cout << "method1 not supported here" << endl;
     } else {
-        prime_gap_parallel(config);
+ //       prime_gap_parallel(config);
     }
 }

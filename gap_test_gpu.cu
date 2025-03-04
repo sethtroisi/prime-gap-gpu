@@ -140,8 +140,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (config.sieve_length < 6 * config.p || config.sieve_length > 22 * config.p) {
-        int sl_min = ((config.p * 8 - 1) / 500 + 1) * 500;
+    if (config.sieve_length < 11 * config.p || config.sieve_length > 22 * config.p) {
+        int sl_min = ((config.p * 12 - 1) / 500 + 1) * 500;
         int sl_max = ((config.p * 20 - 1) / 500 + 1) * 500;
         printf("--sieve_length(%d) should be between [%d, %d]\n",
             config.sieve_length, sl_min, sl_max);
@@ -180,11 +180,15 @@ int main(int argc, char* argv[]) {
 }
 
 
-class SieveResult {
+class SieveHolder {
     public:
-        SieveResult(const struct Config config): config(config) {};
+        SieveHolder(const struct Config config): config(config) {};
 
-        enum State { CONFIGURED, SIEVED, DONE };
+        /**
+         * CONFIGURED -> SIEVING -> TESTING -> DONE
+         * DONE then either removes this or kicks it back to CONFIGURED
+         */
+        enum State { CONFIGURED, SIEVING, TESTING, DONE };
         State state = CONFIGURED;
 
         struct Config config;
@@ -311,7 +315,7 @@ std::atomic<bool> queue_new_work;
 
 // Don't read from sieveds without holding sieve_mtx
 std::mutex sieve_mtx;
-vector<std::unique_ptr<SieveResult>> sieveds;
+vector<std::unique_ptr<SieveHolder>> sieveds;
 
 // Don't mutate an interval (especially status) without holding interval_mtx
 std::mutex interval_mtx;
@@ -390,12 +394,12 @@ void run_sieve_thread(void) {
 
         std::unique_lock<std::mutex> lock(sieve_mtx, std::defer_lock);
         while (queue_new_work) {
-            SieveResult *to_sieve = nullptr;
+            SieveHolder *to_sieve = nullptr;
 
             lock.lock();
             // Check if any config to start processing
             for (auto& sieved : sieveds) {
-                if (sieved->state == SieveResult::CONFIGURED) {
+                if (sieved->state == SieveHolder::CONFIGURED) {
                     to_sieve = sieved.get();
                     break;
                 }
@@ -421,11 +425,11 @@ void run_sieve_thread(void) {
 
             lock.lock();
             if (queue_new_work) {
-                to_sieve->state = SieveResult::SIEVED;
+                to_sieve->state = SieveHolder::SIEVED;
                 to_sieve->last_m = result->m_start;
                 to_sieve->result.swap(result);
             } else {
-                to_sieve->state = SieveResult::DONE;
+                to_sieve->state = SieveHolder::DONE;
             }
             lock.unlock();
         }
@@ -433,8 +437,8 @@ void run_sieve_thread(void) {
         // Delete any CONFIGURED but not started
         lock.lock();
         for (auto& sieved : sieveds) {
-            if (sieved->state == SieveResult::CONFIGURED) {
-                sieved->state = SieveResult::DONE;
+            if (sieved->state == SieveHolder::CONFIGURED) {
+                sieved->state = SieveHolder::DONE;
             }
         }
         lock.unlock();
@@ -546,12 +550,12 @@ size_t add_to_processing(
         std::vector<std::unique_ptr<DataM>> &processing) {
     // Add the n smallest m range from sieveds to processing.
 
-    SieveResult *sieve = nullptr;
+    SieveHolder *sieve = nullptr;
     {
         // Only need the lock while reading state
         std::lock_guard lock(sieve_mtx);
         for (auto& test : sieveds) {
-            if (test->state == SieveResult::SIEVED) {
+            if (test->state == SieveHolder::SIEVED) {
                 if (sieve == nullptr || test->result->m_start < sieve->result->m_start) {
                     sieve = test.get();
                 }
@@ -581,13 +585,11 @@ size_t add_to_processing(
             continue;
         }
 
-        // Updated last_m (current_m during this loop)
         // Update current_index (next_index during the loop)
 
         const auto [m_add, found] = result.m_inc[sieve->current_index];
         const auto m_unknown_deltas = result.unknowns[sieve->current_index];
         assert( (size_t) found == m_unknown_deltas.size() );
-        sieve->last_m += m_add;
         sieve->current_index++;
 
         uint64_t m = sieve->last_m;
@@ -611,7 +613,7 @@ size_t add_to_processing(
 
 
 
-        // No longer need a copy in SieveResult.
+        // No longer need a copy in SieveHolder.
         sieve->result->unknowns[sieve->current_index - 1].clear();
         // Try to reclaim memory.
         sieve->result->unknowns[sieve->current_index - 1].shrink_to_fit();
@@ -621,7 +623,7 @@ size_t add_to_processing(
 
         if (sieve->current_index == result.m_inc.size()) {
             std::lock_guard lock(sieve_mtx);
-            sieve->state = SieveResult::DONE;
+            sieve->state = SieveHolder::DONE;
             break;
         }
     }
@@ -1071,16 +1073,16 @@ void coordinator_thread(struct Config global_config) {
         while (is_running && (queue_new_work || sieveds.size())) {
             usleep(1'000'000); // 1,000ms
 
-            std::unique_ptr<SieveResult> to_test = nullptr;
+            std::unique_ptr<SieveHolder> to_test = nullptr;
             lock.lock();
             if (queue_new_work) {  // Add new configs to sieveds queue.
                 int needed = 2;
                 int finished = 0;
                 for (auto& sieved : sieveds) {
-                    if (sieved->state == SieveResult::CONFIGURED) {
+                    if (sieved->state == SieveHolder::CONFIGURED) {
                         needed -= 1;
                     }
-                    if (sieved->state == SieveResult::SIEVED) {
+                    if (sieved->state == SieveHolder::SIEVED) {
                         needed -= 1;
                         finished += 1;
                     }
@@ -1098,7 +1100,7 @@ void coordinator_thread(struct Config global_config) {
                                 global_config.mstart + global_config.minc);
                     }
 
-                    sieveds.emplace_back(std::make_unique<SieveResult>(global_config));
+                    sieveds.emplace_back(std::make_unique<SieveHolder>(global_config));
                     needed -= 1;
                     total_ranges += 1;
 
@@ -1108,8 +1110,8 @@ void coordinator_thread(struct Config global_config) {
 
             // Remove any finished results.
             sieveds.erase(std::remove_if(std::begin(sieveds), std::end(sieveds),
-                    [](const std::unique_ptr<SieveResult>& sieve) {
-                        return sieve->state == SieveResult::DONE;
+                    [](const std::unique_ptr<SieveHolder>& sieve) {
+                        return sieve->state == SieveHolder::DONE;
                     }), sieveds.end());
             if (sieveds.size() > (2+2)) {
                 printf("%lu open ranges! `overflowed` might be falling behind!\n", sieveds.size());
@@ -1184,7 +1186,7 @@ void prime_gap_test(struct Config config) {
      * coordinator_thread: creates configs and adds them to queue
      * sieve_thread: reads configs from ^ queue and runs combined_sieve_small
      *
-     * batch_thread: reads SieveResult's and creates GPU batches
+     * batch_thread: reads SieveHolder's and creates GPU batches
      * gpu_thread: runs the GPU batches.
      *
      * overflow_sieve_thread: computes extra sieves for prev_p and overflowed next_p

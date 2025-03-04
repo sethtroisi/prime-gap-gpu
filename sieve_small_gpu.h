@@ -81,7 +81,6 @@ __global__ void method2_medium_primes_kernal(
     char *is_coprime2310,
     // Maybe later? is_m_coprime
     int32_t *m_reindex,
-    uint16_t *x_reindex_wheel,
     /** End caches section */
 
     /** config section **/
@@ -186,11 +185,6 @@ __global__ void method2_medium_primes_kernal(
                 if (mii < 0)
                     continue;
 
-                // NOTE: This could be compressed by using xi instead of X
-                //const uint32_t m_mod_wheel = m_mod2310 % x_reindex_wheel_size;
-                //xii = x_reindex_wheel[m_mod_wheel * SL_PLUS1 + X];
-                //assert(xii > 0);
-
                 size_t index = (size_t) mii * num_coprimes + cxti;
 #ifdef BIT_IS_BIT
                 composite[index >> 3] |= 1 << (index&7);
@@ -258,9 +252,6 @@ class GPUSieve {
         char     *is_coprime2310;
         char     *is_m_coprime2310;
         int32_t  *m_reindex;
-
-        uint16_t x_reindex_wheel_size;
-        uint16_t *x_reindex_wheel;
 
         // Cached prime stuff
         uint32_t num_primes;
@@ -332,7 +323,6 @@ class GPUSieve {
                             // K % p == 0  ->  Handled by coprime_X
                             continue;
                         }
-                        // TODO x_reindex_wheel_size handles some primes.
                     }
 
                     const uint64_t base_r = mpz_fdiv_ui(K, prime);
@@ -382,14 +372,7 @@ class GPUSieve {
             const size_t m_reindex_bytes = sizeof(int32_t) * caches.m_reindex.size();
 
             CUDA_CHECK(cudaMallocAsync(&m_reindex, m_reindex_bytes, runner));
-            //CUDA_CHECK(cudaMemcpyAsync(m_reindex, caches.m_reindex.data(), m_reindex_bytes, cudaMemcpyHostToDevice, runner));
-            CUDA_CHECK(cudaMemcpyAsync(m_reindex, m_reindex_tmp.data(), m_reindex_bytes, cudaMemcpyHostToDevice, runner));
-
-            x_reindex_wheel_size = caches.x_reindex_wheel_size;
-            const size_t x_reindex_wheel_bytes = sizeof(uint16_t) * caches.x_reindex_wheel.size();
-            CUDA_CHECK(cudaMallocAsync(&x_reindex_wheel, x_reindex_wheel_size, runner));
-            CUDA_CHECK(cudaMemcpyAsync(x_reindex_wheel, caches.x_reindex_wheel.data(), x_reindex_wheel_size, cudaMemcpyHostToDevice, runner));
-
+            CUDA_CHECK(cudaMemcpyAsync(m_reindex, caches.m_reindex.data(), m_reindex_bytes, cudaMemcpyHostToDevice, runner));
 
 #ifdef BIT_IS_BIT
             composite_bytes = sizeof(char) * num_coprimes * caches.valid_ms / 8 + 1;
@@ -442,7 +425,6 @@ class GPUSieve {
                     this->is_coprime2310,
                     // Maybe later? is_m_coprime
                     this->m_reindex,
-                    this->x_reindex_wheel,
 
                     M_start,
                     M_inc,

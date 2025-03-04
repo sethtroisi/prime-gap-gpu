@@ -38,7 +38,6 @@
 
 #include "gap_common.h"
 #include "cached.h"
-#include "sieve_small_gpu.h"
 
 
 using std::cout;
@@ -50,170 +49,72 @@ using std::vector;
 using namespace std::chrono;
 
 
-// Used to validate factors divide the number claimed
-//#define GMP_VALIDATE_FACTORS
-
 class method2_stats {
     public:
         method2_stats() {};
 
         method2_stats(
-                int thread_i,
                 const struct Config& config,
                 size_t valid_ms,
                 double initial_prob_prime
         ) {
-            thread = thread_i;
-
             start_t = high_resolution_clock::now();
-            interval_t = high_resolution_clock::now();
             total_unknowns = config.sieve_length * valid_ms;
-
-            next_mult = 1000;
 
             prob_prime = initial_prob_prime;
             current_prob_prime = prob_prime;
         }
 
-        // Some prints only happen if thread == 0
-        int thread = 0;
-        uint64_t next_print = 0;
-        uint64_t next_mult = 10000;
-
         // global and interval start times
         high_resolution_clock::time_point  start_t;
-        high_resolution_clock::time_point  interval_t;
 
         long total_unknowns = 0;
-        long small_prime_factors_interval = 0;
-        // Sum of above two, mostly handled in method2_increment_print
-        long prime_factors = 0;
-
-        size_t pi = 0;
-        size_t pi_interval = 0;
-
-        uint64_t validated_factors = 0;
 
         // prob prime after sieve up to some prime threshold
         double current_prob_prime = 0;
 
         // Constants (more of a stats storage)
         double prob_prime = 0;
-        uint64_t last_prime = 0;
 };
 
-void method2_increment_print(
+void method2_print(
         uint64_t prime,
         size_t valid_ms,
         vector<bool> &composite,
         method2_stats &stats,
         const struct Config& config) {
 
-    while (prime >= stats.next_print && stats.next_print < stats.last_prime) {
-        //printf("\t\tmethod2_increment_print %'ld >= %'ld\n", prime, stats.next_print);
-        const size_t max_mult = 100'000'000'000L * (config.threads > 2 ? 10L : 1L);
+    auto   s_stop_t = high_resolution_clock::now();
+    // total time, interval time
+    double     secs = duration<double>(s_stop_t - stats.start_t).count();
+    uint32_t SIEVE_LENGTH = config.sieve_length;
 
+    printf("%'-10ld\t(seconds: %-.1f | per m: %.3g)",
+        prime, secs, secs / valid_ms);
 
-        // 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000 ...
-        // 60, 70, 80, 90, 100, 120, 150, 200, 300 billion because intervals are wider.
-        size_t extra_multiples = prime > ((config.threads > 4) ? 100'000'000 : 1'000'000);
-        // With lots of threads small intervals are very fast
-        // and large % of time is spent counting unknowns
+    // See THEORY.md
+    double prob_prime_after_sieve = stats.prob_prime * log(prime) * exp(GAMMA);
+    double delta_sieve_prob = (1/stats.current_prob_prime - 1/prob_prime_after_sieve);
+    double skipped_prp = valid_ms * delta_sieve_prob;
 
-        // Next time to increment the interval size
-        size_t next_next_mult = (5 + 10 * extra_multiples) * stats.next_mult;
-        if (stats.next_mult < max_mult && stats.next_print == next_next_mult) {
-            stats.next_mult *= 10;
-            stats.next_print = 0;
-        }
+    uint64_t t_total_unknowns = std::count(composite.begin(), composite.end(), 0);
+    uint64_t new_composites = stats.total_unknowns - t_total_unknowns;
 
-        // 1,2,3,4,5,6,7,8,9,10, SKIP to 12, SKIP to 15
-        stats.next_print += stats.next_mult;
-        assert(stats.next_print % stats.next_mult == 0);
+    // count_coprime_sieve * valid_ms also makes sense but leads to smaller numbers
+    printf("\tunknowns %'9ld/%-5ld\t"
+           "(avg/m: %.2f) (composite: %.2f%% +%.3f%% +%'ld)\n",
+        t_total_unknowns, valid_ms,
+        1.0 * t_total_unknowns / valid_ms,
+        100.0 - 100.0 * t_total_unknowns / (SIEVE_LENGTH * valid_ms),
+        100.0 * new_composites / (SIEVE_LENGTH * valid_ms),
+        new_composites);
 
-        if (stats.next_mult < max_mult) {
-            int64_t ratio = stats.next_print / stats.next_mult;
-            assert(ratio >= 1 && ratio <= 14);
+    // NOTE: There used to be some validity check on t_total_unknowns ti required
+    // count_coprime_p which is hard to estimate and was directly computed when
+    // prime pasted P, this is non-trivial in the GPU only world.
 
-            if (ratio > 10 && ratio < 12) {  // Skip 11 => 12
-                stats.next_print = 12 * stats.next_mult;
-            } else if (ratio > 12) {  // Skip 13, 14 => 15
-                stats.next_print = 15 * stats.next_mult;
-            }
-        }
-
-        // Never set next_print beyond last_prime
-        stats.next_print = std::min(stats.next_print, stats.last_prime);
-    }
-
-    bool is_last = (prime == stats.last_prime);
-
-    if (config.verbose + is_last >= 1) {
-        auto   s_stop_t = high_resolution_clock::now();
-        // total time, interval time
-        double     secs = duration<double>(s_stop_t - stats.start_t).count();
-        double int_secs = duration<double>(s_stop_t - stats.interval_t).count();
-        uint32_t SIEVE_LENGTH = config.sieve_length;
-
-        if (stats.thread >= 1) {
-            printf("Thread %d\t", stats.thread);
-        }
-
-        stats.pi += stats.pi_interval;
-
-        printf("%'-10ld\t(seconds: %.2f/%-.1f | per m: %.3g)",
-            prime,
-            int_secs, secs,
-            secs / valid_ms);
-        if (int_secs > 240) {
-            // Add " @ HH:MM:SS" so that it is easier to predict when the next print will happen
-            time_t rawtime = std::time(nullptr);
-            struct tm *tm = localtime( &rawtime );
-            printf(" @ %d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
-        }
-        printf("\n");
-        stats.interval_t = s_stop_t;
-
-        int verbose = config.verbose + (2 * is_last) + (prime > 1e9) + (stats.thread == 0);
-        if (verbose >= 3) {
-            stats.prime_factors += stats.small_prime_factors_interval;
-
-            // See THEORY.md
-            double prob_prime_after_sieve = stats.prob_prime * log(prime) * exp(GAMMA);
-            double delta_sieve_prob = (1/stats.current_prob_prime - 1/prob_prime_after_sieve);
-            double skipped_prp = valid_ms * delta_sieve_prob;
-
-            if (is_last || config.threads <= 1) {
-                uint64_t t_total_unknowns = std::count(composite.begin(), composite.end(), 0);
-                uint64_t new_composites = stats.total_unknowns - t_total_unknowns;
-
-                // count_coprime_sieve * valid_ms also makes sense but leads to smaller numbers
-                printf("\tunknowns %'9ld/%-5ld\t"
-                       "(avg/m: %.2f) (composite: %.2f%% +%.3f%% +%'ld)\n",
-                    t_total_unknowns, valid_ms,
-                    1.0 * t_total_unknowns / valid_ms,
-                    100.0 - 100.0 * t_total_unknowns / (SIEVE_LENGTH * valid_ms),
-                    100.0 * new_composites / (SIEVE_LENGTH * valid_ms),
-                    new_composites);
-
-                // NOTE: There used to be some validity check on t_total_unknowns ti required
-                // count_coprime_p which is hard to estimate and was directly computed when
-                // prime pasted P, this is non-trivial in the GPU only world.
-
-                stats.total_unknowns = t_total_unknowns;
-            }
-
-            stats.current_prob_prime = prob_prime_after_sieve;
-
-            double prp_rate = skipped_prp / (int_secs * config.threads);
-
-            printf("\n");
-
-            stats.small_prime_factors_interval = 0;
-        }
-
-        stats.pi_interval = 0;
-    }
+    stats.total_unknowns = t_total_unknowns;
+    stats.current_prob_prime = prob_prime_after_sieve;
 }
 
 /**
@@ -301,26 +202,7 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
         // Includes 0
         x_reindex.resize(SL+1, 0);
 
-        // reindex composite[m][i] using (m, wheel) (wheel is 1!,2!,3!,5!)
-        // Would reduce size from wheel * SL to wheel * coprime_i
-
-        // Note: Larger wheel eliminates more numbers but takes more space.
-        // 6 seems reasonable for larger numbers  (uses 1/3 memory = 33%)
-        // 30 is maybe better for smaller numbers (uses 4/15 memory = 26%)
-        // 210 is maybe better (uses 24/105 = 23% memory) but x_reindex_wheel might not fit in memory.
-        uint32_t wheel = gcd(D, METHOD2_WHEEL_MAX);
-        uint32_t reindex_size = wheel * SL * sizeof(uint32_t);
-        if (reindex_size > 7 * 1024 * 1024) {
-            if (wheel % 7) {
-                wheel /= 7;
-            } else if (wheel % 5) {
-                wheel /= 5;
-            }
-        }
-        x_reindex_wheel_size = wheel;
-        assert(x_reindex_wheel_size <= METHOD2_WHEEL_MAX); // Static size in Caches will break;
-
-        x_reindex_wheel_count.resize(x_reindex_wheel_size, 0);
+        // reindex composite[m][i] using coprime_X
 
         vector<char> is_offset_coprime(SL+1, 1);
         for (uint32_t prime : P_primes) {
@@ -363,58 +245,9 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
             assert(coprime_count == coprime_X.size());
         }
 
-        // Start at m_wheel == 0 so that re_index_m_wheel == 1 (D=1) works.
-
-        x_reindex_wheel.resize(x_reindex_wheel_size * (SL+1), 0);
-        for (size_t m_wheel = 1; m_wheel < x_reindex_wheel_size; m_wheel++) {
-            if (gcd(x_reindex_wheel_size, m_wheel) > 1) continue;
-
-
-            // m * K % wheel => m_wheel % wheel
-            uint32_t mod_center = m_wheel * mpz_fdiv_ui(K, x_reindex_wheel_size);
-
-            // 0 is special index
-            x_unindex_wheel[m_wheel].push_back(0xFFFF);
-
-            size_t coprime_count_wheel = 0;
-            for (size_t i = 0; i < SL+1; i++) {
-                if (is_offset_coprime[i] > 0) {
-                    if (gcd(mod_center + i, x_reindex_wheel_size) == 1) {
-                        coprime_count_wheel += 1;
-                        x_reindex_wheel[m_wheel * (SL+1) + i] = coprime_count_wheel;
-                        // i is offset, want to know that index in coprime_X
-                        x_unindex_wheel[m_wheel].push_back(x_reindex[i] - 1);
-                    }
-                }
-            }
-            x_reindex_wheel_count[m_wheel] = coprime_count_wheel;
-            assert(coprime_count_wheel >= 1);
-
-            {
-                size_t x_reindex_limit = std::numeric_limits<
-                    std::remove_extent_t<decltype(x_reindex_wheel)>::value_type>::max();
-
-                // Only happens when P very large (100K)
-                // Fix by changing x_reindex_wheel type to int32_t
-                assert(coprime_count_wheel < x_reindex_limit);  // See comment above.
-            }
-        }
-
-        for (const auto X: coprime_X) {
-            size_t count = 0;
-            for (size_t i = 0; i < x_reindex_wheel_size; i++) {
-                if (x_reindex_wheel[i * (SL+1) + X] > 0) {
-                    count += 1;
-                }
-            }
-            assert( count > 0 ); // coprime_X which is never coprime???
-        }
-
-        uint32_t max_composites = *std::max_element(
-                x_reindex_wheel_count.begin(), x_reindex_wheel_count.end());
-        composite_line_size = 32 * ((max_composites + 31) / 32);
+        composite_line_size = 8 * ((coprime_X.size() + 7) / 8);
         if (config.verbose >= 2) {
-            cout << "Need at least " << max_composites << " per m, rounding up to "
+            cout << "Need at least " << coprime_X.size() << " per m, rounding up to "
                  << composite_line_size << endl << endl;;
         }
 
@@ -434,14 +267,10 @@ Cached::Cached(const struct Config& config, const mpz_t &K) {
                     is_m_coprime2310[i] = 0;
 
         assert(count(is_coprime2310.begin(), is_coprime2310.end(), 1) == 480);
-        /**
-         * Because 2310 is a multiple of x_reindex_wheel_size,
-         * x_reindex_wheel will always be true if prefiltered by is_coprime2310[n % 310]
-         */
-        assert(2310 % x_reindex_wheel_size == 0);
 };
 
 
+/**
 std::unique_ptr<SieveOutput> save_unknowns(
         const struct Config& config,
         const mpz_t &K,
@@ -484,7 +313,7 @@ std::unique_ptr<SieveOutput> save_unknowns(
             assert(gcd(m, D) == 1);
             uint16_t delta = m - m_last;
             assert( delta <= 0x7F );
-            output->m_inc.emplace_back(m - m_last, /* found */ 0);
+            output->m_inc.emplace_back(m - m_last, <comment> found 0);
             m_last = m;
         }
     }
@@ -570,10 +399,12 @@ std::unique_ptr<SieveOutput> save_unknowns(
 
     return output;
 }
+*/
+
+SieveOutput::SieveOutput(const struct Config& config) {
+    // TODO gpu_sieve, m_start, coprime_X, m_inc, unknown_X0, unknowns, max_X
 
 
-std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
-    // Method2
     const uint64_t M_start = config.mstart;
     const uint32_t M_inc = config.minc;
 
@@ -613,7 +444,6 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
     // Various pre-calculated arrays of is_coprime arrays
     const Cached caches(config, K);
     const size_t valid_ms = caches.valid_ms;
-    const uint32_t x_reindex_wheel_size = caches.x_reindex_wheel_size;
 
     const size_t count_coprime_sieve = caches.coprime_X.size();
 
@@ -671,21 +501,8 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
             printf("%s%s, ~%'ld MB\n", s_coprime_m.c_str(), s_coprime_i.c_str(), guess / MB);
         }
 
-        if (x_reindex_wheel_size > 1) {
-            // Update guess with first wheel count for OOM prevention check
-            size_t guess_avg_count_coprime = caches.x_reindex_wheel_count[1];
-            guess = overhead_bits + valid_ms * (guess_avg_count_coprime + 1);
-        }
-
         // Try to prevent OOM, check composite < 10GB allocation,
         if (guess > (size_t) config.max_mem * 1024 * MB) {
-            if (config.verbose >= 1 && x_reindex_wheel_size > 1) {
-                size_t allocated = guess - overhead_bits;
-                printf("%*s", align_print, "");
-                printf("coprime wheel %ld/%d, ~%'ldMB\n",
-                    allocated / valid_ms, SIEVE_LENGTH,
-                    allocated / 8 / 1024 / 1024);
-            }
             printf("\ncombined_sieve expects to use %'ld MB which is greater than %d GB limit\n",
                     guess / MB, config.max_mem);
             printf("\nAdd `--max-mem %ld` to skip this warning\n", (guess / 1024 / MB) + 1);
@@ -693,22 +510,16 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
         }
 
         size_t allocated = composite.size();
-        for (size_t i = 0; i < valid_ms; i++) {
-            int m_wheel = (M_start + caches.valid_mi[i]) % x_reindex_wheel_size;
-            assert(gcd(m_wheel, x_reindex_wheel_size) == 1);
 
+        // TODO it's possible I should handle multiples of D primes here?
+        // If not here where.
+        for (size_t i = 0; i < valid_ms; i++) {
             composite[i * caches.composite_line_size] = true;
             // disable all the extra padding bits
-            size_t used = caches.x_reindex_wheel_count[m_wheel] + 1;
+            size_t used = caches.coprime_X.size() + 1;
             for (size_t j = used; j < caches.composite_line_size; j++) {
                 composite[i * caches.composite_line_size + j] = true;
             }
-        }
-        if (config.verbose >= 1 && x_reindex_wheel_size > 1) {
-            printf("%*s", align_print, "");
-            printf("coprime wheel %ld/%d, ~%'ld MB\n",
-                allocated / valid_ms, SIEVE_LENGTH,
-                allocated / 8 / 1024 / 1024);
         }
 
         if (config.verbose >= 1) {
@@ -719,19 +530,21 @@ std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config) {
     }
 
     // Used for various stats
-    method2_stats stats(/* thread */ 0, config, valid_ms, prob_prime);
-    stats.last_prime = LAST_PRIME;
+    method2_stats stats(config, valid_ms, prob_prime);
 
     {
         auto gsieve = GPUSieve(config, K, caches, config.max_prime);
         gsieve.run_sieve(config, config.mstart, config.minc, caches, composite);
     }
 
-    method2_increment_print(LAST_PRIME, caches.valid_ms, composite, stats, config);
+    method2_print(LAST_PRIME, caches.valid_ms, composite, stats, config);
 
-    auto result = save_unknowns(config, K, caches, composite);
-
+    //save_unknowns(config, K, caches, composite);
     mpz_clear(K);
+}
 
-    return result;
+void SieveOutput::update(const struct Config& new_config) {
+}
+
+void SieveOutput::run(const struct Config& new_config) {
 }

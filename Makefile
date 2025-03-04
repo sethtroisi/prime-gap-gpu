@@ -1,4 +1,4 @@
-# Copyright 2020 Seth Troisi
+# Copyright 2025 Seth Troisi
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,9 +49,11 @@ sieve_small.o: sieve_small.cpp sieve_small_gpu.h cached.h
 combined_sieve: combined_sieve.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES)
 
-combined_sieve_small: combined_sieve_small.cpp $(OBJS) sieve_small.o
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES) \
-		-L /usr/local/cuda/lib64 -lcuda -lcudart
+combined_sieve_small: combined_sieve_small.cu $(OBJS) sieve_small.o
+	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
+		$(CUDA_FLAGS) \
+		-I../CGBN/include \
+		$(LDFLAGS)
 
 gap_stats: gap_stats.cpp gap_common.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)

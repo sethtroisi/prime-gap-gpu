@@ -54,18 +54,6 @@ class Cached {
         // Special 0'th entry stands for all not coprime
         vector<uint32_t> x_reindex;
 
-        // reindex composite[m][i] using (m, wheel) (wheel is 1!, 2!, 3!, or 5!)
-        // This could be first indexed by x_reindex,
-        // Would reduce size from wheel * (SL+1) to wheel * coprime_i
-
-        // Note: Larger wheel eliminates more numbers but takes more space.
-        // 6 (saves 2/3 memory), 30 (saves 11/15 memory)
-        uint32_t x_reindex_wheel_size;
-        vector<uint16_t> x_reindex_wheel; // [x_reindex_wheel_size * (SL+1)]
-        // x_unindex_wheel[j] = k, where x_reindex_wheel[coprime_X[k]] = j
-        vector<uint16_t> x_unindex_wheel[METHOD2_WHEEL_MAX];
-        vector<size_t> x_reindex_wheel_count; // For stats and packed composite
-
         uint64_t composite_line_size;
 
         int32_t K_mod2310;

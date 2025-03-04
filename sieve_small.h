@@ -21,12 +21,7 @@
 #include <vector>
 
 #include "gap_common.h"
-
-
-// This probably should be optimized to fit in L2/L3
-// Related to sizeof(int) * SIEVE_INTERVAL * WHEEL_MAX
-// WHEEL should divide config.d
-#define METHOD2_WHEEL_MAX (2*3*5*7)
+#include "sieve_small_gpu.h"
 
 
 using std::vector;
@@ -37,8 +32,7 @@ class SieveOutput {
         SieveOutput(const SieveOutput&) = delete;
         void operator=(const SieveOutput&) = delete;
 
-        SieveOutput(uint64_t m_start, int32_t sieve_length):
-            m_start(m_start), sieve_length(sieve_length) {};
+        SieveOutput(const struct Config& config);
 
         /* Was used for debug.
         ~SieveOutput() {
@@ -46,18 +40,26 @@ class SieveOutput {
         }
         // */
 
-        const uint64_t m_start;
-        // Is there anything also needed from config?
-        const int32_t sieve_length;
+        // Used to run the sieve
+        GPUSieve *gpu_sieve;
 
-        // unknowns are delta run length encoded into this table.
+        uint64_t m_start;
+
         vector<uint16_t> coprime_X;
 
-        // m_increment, unknown count
-        vector<std::tuple<int8_t, uint8_t>> m_inc;
+        // mi for m being considered, set to -1 to remove a values
+        vector<uint32_t> m_inc;
 
-        vector<vector<uint16_t>> unknowns;
+        /**
+         * 32 bits of "unknowns"
+         * 0th bit is coprime_X[unknown_X0], 1st bit is coprime_X[unknown_X0+1] ...
+         */
+        uint16_t unknown_X0;
+        vector<uint32_t> unknowns;
+
+        // The largest X evaluated by this sieve.
+        int32_t  max_X;
+
+        void update(const struct Config& new_config);
+        void run(const struct Config& config);
 };
-
-
-std::unique_ptr<SieveOutput> prime_gap_parallel(const struct Config& config);
