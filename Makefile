@@ -39,7 +39,7 @@ endif
 
 all: $(OUT)
 
-sieve_small.o: sieve_small.cpp sieve_small_gpu.h cached.h
+sieve_small.o: sieve_small.cu
 	nvcc -o $@ -x cu -c $(filter-out %.h, $^) \
 		$(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
 

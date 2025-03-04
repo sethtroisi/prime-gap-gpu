@@ -26,27 +26,23 @@
 
 using std::vector;
 
-class SieveOutput {
+class GPUSieve {
     public:
         // Prevent copying which would use lots of memory...
-        SieveOutput(const SieveOutput&) = delete;
-        void operator=(const SieveOutput&) = delete;
+        GPUSieve(const GPUSieve&) = delete;
+        void operator=(const GPUSieve&) = delete;
 
-        SieveOutput(const struct Config& config);
-
-        /* Was used for debug.
-        ~SieveOutput() {
-            printf("~SieveOutput\n");
-        }
-        // */
+        GPUSieve(const struct Config& config);
+        ~GPUOutput();
 
         // Used to run the sieve
         GPUSieve *gpu_sieve;
 
-        uint64_t m_start;
+        mpz_t K;
 
         vector<uint16_t> coprime_X;
 
+        uint64_t M_start;
         // mi for m being considered, set to -1 to remove a values
         vector<uint32_t> m_inc;
 
@@ -62,4 +58,44 @@ class SieveOutput {
 
         void update(const struct Config& new_config);
         void run(const struct Config& config);
+
+    private:
+        cudaStream_t runner;
+
+        // GPU stats
+        const size_t   stats_per_thread = 4;
+        const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
+        int64_t  *host_thread_stats;
+        int64_t  *thread_stats;
+
+        // Cache stuff
+        uint32_t num_coprimes;
+        uint32_t *coprime_X;
+
+        char     *is_coprime2310;
+        char     *is_m_coprime2310;
+        int32_t  *m_reindex;
+
+        // Cached prime stuff
+        uint32_t num_primes;
+        uint32_t *primes;
+        // Remainders isn't actually used!
+        // uint32_t *remainders; // r = K mod p
+        int32_t *neg_inv_Ks;  // r^1 mod p
+
+        // Maybe later? is_m_coprime
+        char *composite;
+        size_t composite_bytes;
+
+        // Host side
+
+        const size_t composite_segment_size = 30'000'000;
+        size_t host_composite_bytes;
+        char* host_composite;
+
+        // TODO implement this
+        uint64_t M_start_check;
+        uint32_t K_mod2310;
+
+
 };
