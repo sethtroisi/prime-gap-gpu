@@ -185,17 +185,17 @@ class SieveHolder {
         SieveHolder(const struct Config config): config(config) {};
 
         /**
-         * CONFIGURED -> SIEVING -> TESTING -> DONE
+         * CONFIGURED -> SIEVING -> TESTING -> FINAL -> DONE
          * DONE then either removes this or kicks it back to CONFIGURED
          */
-        enum State { CONFIGURED, SIEVING, TESTING, DONE };
+        enum State { CONFIGURED, SIEVING, TESTING, FINAL, DONE };
         State state = CONFIGURED;
 
         struct Config config;
 
-        uint64_t last_m = (uint64_t) -1;
+        // Index for next DataM
         size_t current_index = 0;
-        std::unique_ptr<SieveOutput> result;
+        std::unique_ptr<GPUSieve> sieve;
 };
 
 
@@ -414,10 +414,13 @@ void run_sieve_thread(void) {
 
             auto M_end = to_sieve->config.mstart + to_sieve->config.minc;
             auto s_start_t = high_resolution_clock::now();
+
             to_sieve->config.threads = COMBINED_SIEVE_THREADS;
             to_sieve->config.verbose -= 3;
-            auto result = prime_gap_parallel(to_sieve->config);
+            to_sieve->state = SieveHolder::SIEVING;
+            auto sieve = std::make_unique<GPUSieve>(to_sieve->config);
             to_sieve->config.verbose += 3;
+
             auto s_stop_t = high_resolution_clock::now();
             printf("\tCombined Sieve (%ldM to %ldM) took %.1f seconds\n",
                    to_sieve->config.mstart / 1'000'000, M_end / 1'000'000,
@@ -425,9 +428,8 @@ void run_sieve_thread(void) {
 
             lock.lock();
             if (queue_new_work) {
-                to_sieve->state = SieveHolder::SIEVED;
-                to_sieve->last_m = result->m_start;
-                to_sieve->result.swap(result);
+                to_sieve->state = SieveHolder::TESTING;
+                to_sieve->sieve.swap(sieve);
             } else {
                 to_sieve->state = SieveHolder::DONE;
             }
@@ -550,35 +552,34 @@ size_t add_to_processing(
         std::vector<std::unique_ptr<DataM>> &processing) {
     // Add the n smallest m range from sieveds to processing.
 
-    SieveHolder *sieve = nullptr;
+    SieveHolder *holder = nullptr;
     {
         // Only need the lock while reading state
         std::lock_guard lock(sieve_mtx);
         for (auto& test : sieveds) {
-            if (test->state == SieveHolder::SIEVED) {
-                if (sieve == nullptr || test->result->m_start < sieve->result->m_start) {
-                    sieve = test.get();
+            if (test->state == SieveHolder::TESTING) {
+                if (holder == nullptr || test->sieve->M_start < holder->sieve->M_start) {
+                    holder = test.get();
                 }
             }
         }
     }
 
-    if (!sieve) {
+    if (!holder) {
         // Nothing to add!
         return 0;
     }
 
-    const SieveOutput& result = *(sieve->result);
+    const GPUSieve& sieve = *(holder->sieve);
 
-    int32_t sl = result.sieve_length;
-    assert( sl == (int32_t) sieve->config.sieve_length );
-
-    const auto& coprime_X = result.coprime_X;
+    // Max coprime_X that was processed in this batch of GPUSieve
+    int32_t max_X = sieve.max_X;
+    const auto& coprime_X = sieve.coprime_X;
 
     size_t added = 0;
 
     //printf("Adding %lu from m_start: %lu @ index: %lu/%lu\n",
-    //    add, result.m_start, sieve->current_index, result.m_inc.size());
+    //    add, sieve.m_start, sieve->current_index, sieve.m_inc.size());
 
     for (auto& interval : processing) {
         if (interval.get() != nullptr) {
@@ -586,44 +587,37 @@ size_t add_to_processing(
         }
 
         // Update current_index (next_index during the loop)
+        uint32_t index = holder->current_index;
+        holder->current_index += 1;
+        assert( index < sieve.m_inc.size() );
 
-        const auto [m_add, found] = result.m_inc[sieve->current_index];
-        const auto m_unknown_deltas = result.unknowns[sieve->current_index];
-        assert( (size_t) found == m_unknown_deltas.size() );
-        sieve->current_index++;
+        const auto m_inc = sieve.m_inc[index];
+        auto m_unknown_deltas = sieve.unknowns[index];
 
-        uint64_t m = sieve->last_m;
+        uint64_t m = sieve.M_start + m_inc;
         assert( gcd(m, D) == 1 );
 
         added += 1;
-        interval.reset(new DataM(m, sl));
-        interval->unknowns[1].reserve(found);
+        interval.reset(new DataM(m, max_X));
 
-        int32_t offset = 0;
-        for (size_t j = 0; j < (unsigned) found; j++) {
-            auto delta = m_unknown_deltas[j];
-            offset += delta;
-            interval->unknowns[1].push_back(coprime_X[offset]);
+        // For all the bits set in m_unknown_deltas
+        int32_t offset = sieve.unknown_X0;
+        while (m_unknown_deltas) {
+            int32_t i = ffsl(m_unknown_deltas);
+            m_unknown_deltas ^= 1 << i;
+            interval->unknowns[1].push_back(coprime_X[offset + i]);
         }
-
-        assert( (size_t) offset < coprime_X.size() );
-        assert( m_unknown_deltas.size() > 2 );
-        assert( interval->unknowns[1].size() == (size_t) found );
-        assert( interval->unknowns[1].back() <= sl );
-
-
-
-        // No longer need a copy in SieveHolder.
-        sieve->result->unknowns[sieve->current_index - 1].clear();
-        // Try to reclaim memory.
-        sieve->result->unknowns[sieve->current_index - 1].shrink_to_fit();
+        // TODO track the number of remaining unknowns?
+        // Should this happen here or somewhere else?
+        holder->sieve->unknowns[index] = 0;
 
         mpz_init(interval->center);
         mpz_mul_ui(interval->center, K, interval->m);
 
-        if (sieve->current_index == result.m_inc.size()) {
+        if (index+1 == sieve.m_inc.size()) {
             std::lock_guard lock(sieve_mtx);
-            sieve->state = SieveHolder::DONE;
+            // TODO who marks this as DONE?
+            holder->state = SieveHolder::FINAL;
             break;
         }
     }
@@ -1082,7 +1076,7 @@ void coordinator_thread(struct Config global_config) {
                     if (sieved->state == SieveHolder::CONFIGURED) {
                         needed -= 1;
                     }
-                    if (sieved->state == SieveHolder::SIEVED) {
+                    if (sieved->state == SieveHolder::SIEVING) {
                         needed -= 1;
                         finished += 1;
                     }

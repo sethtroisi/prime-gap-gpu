@@ -21,8 +21,10 @@
 #include <vector>
 
 #include "gap_common.h"
-#include "sieve_small_gpu.h"
 
+// TODO figure out what to set here
+#define GRID_SIZE 1024
+#define BLOCK_SIZE 64
 
 using std::vector;
 
@@ -33,18 +35,13 @@ class GPUSieve {
         void operator=(const GPUSieve&) = delete;
 
         GPUSieve(const struct Config& config);
-        ~GPUOutput();
-
-        // Used to run the sieve
-        GPUSieve *gpu_sieve;
-
-        mpz_t K;
+        ~GPUSieve();
 
         vector<uint16_t> coprime_X;
 
         uint64_t M_start;
         // mi for m being considered, set to -1 to remove a values
-        vector<uint32_t> m_inc;
+        vector<int32_t> m_inc;
 
         /**
          * 32 bits of "unknowns"
@@ -62,6 +59,8 @@ class GPUSieve {
     private:
         cudaStream_t runner;
 
+        // TODO consider moving to GPUCached
+        /**** GPU POINTERS ****/
         // GPU stats
         const size_t   stats_per_thread = 4;
         const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
@@ -70,7 +69,7 @@ class GPUSieve {
 
         // Cache stuff
         uint32_t num_coprimes;
-        uint32_t *coprime_X;
+        uint32_t *test_X;
 
         char     *is_coprime2310;
         char     *is_m_coprime2310;
@@ -86,6 +85,7 @@ class GPUSieve {
         // Maybe later? is_m_coprime
         char *composite;
         size_t composite_bytes;
+        /**** END GPU POINTERS ****/
 
         // Host side
 
@@ -93,9 +93,10 @@ class GPUSieve {
         size_t host_composite_bytes;
         char* host_composite;
 
-        // TODO implement this
-        uint64_t M_start_check;
+        mpz_t K;
         uint32_t K_mod2310;
 
+        // TODO implement this
+        uint64_t M_start_check;
 
 };
