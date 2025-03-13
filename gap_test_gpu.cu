@@ -196,6 +196,13 @@ class SieveHolder {
         // Index for next DataM
         size_t current_index = 0;
         std::unique_ptr<GPUSieve> sieve;
+
+        // TODO will track the number of items in this associated with a DataM
+        size_t open_m = 0;
+
+        // Open questions:
+        //  When Prime how do you mark as "done"
+        //  When finished with interval how to mark "done?"
 };
 
 
@@ -211,11 +218,12 @@ class DataM {
         const unsigned short sieve_length = 0;
 
         // READY means that load thread should pull next unknown and run it
-        // RUNNING means that next unkown is currently running on GPU
+        // RUNNING means that next unknown is currently running on GPU
+        // NO_X means no more unknowns in GPUSieve to test.
         // OVERFLOWED means that load thread ran out of unknowns to load
         // SIEVING means that cpu sieve thread is currently processing
         // PRIMED means that a prime endpoint (next_p or prev_p has just been found)
-        enum State : uint8_t { READY, RUNNING, OVERFLOWED, SIEVING, PRIMED};
+        enum State : uint8_t { READY, RUNNING, NO_X, OVERFLOWED, SIEVING, PRIMED};
         State state = READY;
 
         enum Side : uint8_t { NEXT_P, PREV_P };
@@ -430,6 +438,7 @@ void run_sieve_thread(void) {
 
             lock.lock();
             if (queue_new_work) {
+                cout << "Setting state to TESTING" << endl;
                 to_sieve->state = SieveHolder::TESTING;
                 to_sieve->sieve.swap(sieve);
             } else {
@@ -507,7 +516,7 @@ void run_overflow_thread(const mpz_t &K_in) {
                 sieve_interval_cpu(interval.m, K, p_and_r, sieve_start, sl, unknowns);
                 lock.lock();
 
-                assert(5 <= unknowns.size() && unknowns.size() <= (((size_t) sl) / 4));
+                assert(1 <= unknowns.size() && unknowns.size() <= (((size_t) sl) / 4));
                 assert(unknowns.front() >= 0 && unknowns.back() <= sl);
 
                 if (interval.side == DataM::Side::PREV_P) {
@@ -580,9 +589,6 @@ size_t add_to_processing(
 
     size_t added = 0;
 
-    //printf("Adding %lu from m_start: %lu @ index: %lu/%lu\n",
-    //    add, sieve.m_start, sieve->current_index, sieve.m_inc.size());
-
     for (auto& interval : processing) {
         if (interval.get() != nullptr) {
             continue;
@@ -601,11 +607,14 @@ size_t add_to_processing(
 
         added += 1;
         interval.reset(new DataM(m, max_X));
+        interval->unknowns[1].reserve(32);
 
         // For all the bits set in m_unknown_deltas
         int32_t offset = sieve.unknown_X0;
+
         while (m_unknown_deltas) {
-            int32_t i = ffsl(m_unknown_deltas);
+            int32_t i = ffsl(m_unknown_deltas) - 1;
+            assert( m_unknown_deltas & (1 << i) );
             m_unknown_deltas ^= 1 << i;
             interval->unknowns[1].push_back(coprime_X[offset + i]);
         }
@@ -623,6 +632,12 @@ size_t add_to_processing(
             break;
         }
     }
+
+    printf("Added %lu from m_start: %lu @ index: %lu/%lu\n",
+        added, sieve.M_start, holder->current_index, sieve.m_inc.size());
+
+    // No one else will be competing for this field so save to write without lock.
+    holder->open_m += added;
 
     return added;
 }
@@ -727,11 +742,13 @@ void fill_batch(
             int32_t offset = 0;
             if (side == DataM::Side::NEXT_P) {
                 assert(!interval.n_found);
+                // TODO this isn't quite the same logic anymore.
+                // DataM is maybe still OVERFLOWED but not to OVERFLOWED QUEUE
                 if (interval.n_index == interval.unknowns[1].size()) {
-                    interval.state = DataM::State::OVERFLOWED;
-                    stats.s_gap_out_of_sieve_next += 1;
-                    overflowed.push_back(row.get());
-                    any_pushed_to_overflow = true;
+                    interval.state = DataM::State::NO_X;
+                    //stats.s_gap_out_of_sieve_next += 1;
+                    //overflowed.push_back(row.get());
+                    //any_pushed_to_overflow = true;
                     continue;
                 }
                 index = interval.n_index++;
@@ -838,6 +855,8 @@ void create_gpu_batches(const struct Config og_config) {
             }
         }
 
+        printf("\tStarting to create GPU Batches\n");
+
         // Used for various stats
         StatsCounters stats(high_resolution_clock::now());
 
@@ -942,6 +961,7 @@ void create_gpu_batches(const struct Config og_config) {
                 }
             }
 
+            // TODO could collect any_primed from process_finished_batch and use as conditional here.
             {
                 bool any_pushed_to_overflow = false;
                 // Process & remove finished intervals.
@@ -956,6 +976,10 @@ void create_gpu_batches(const struct Config og_config) {
                     if (interval.state != DataM::State::PRIMED) {
                         continue;
                     }
+
+                    // TODO decrement open_m from one of the SieveHolders
+                    // Could strictly speaking do all of the primed work at the end now?
+                    // less realtime but easier to code?
 
                     int prev_p = interval.prev_p;
                     int next_p = interval.next_p;
@@ -1079,6 +1103,10 @@ void coordinator_thread(struct Config global_config) {
                         needed -= 1;
                     }
                     if (sieved->state == SieveHolder::SIEVING) {
+                        needed -= 1;
+                        finished += 1;
+                    }
+                    if (sieved->state == SieveHolder::TESTING) {
                         needed -= 1;
                         finished += 1;
                     }
