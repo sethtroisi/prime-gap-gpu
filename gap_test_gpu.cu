@@ -186,7 +186,11 @@ class SieveHolder {
 
         /**
          * CONFIGURED -> SIEVING -> TESTING -> FINAL -> DONE
-         * DONE then either removes this or kicks it back to CONFIGURED
+         * FINAL => GPUSieve all converted to DataM.
+         *      After any outstanding GPUBatch's are finished, open_m will be 0.
+         *      Either:
+         *          change back to CONFIGURED and running next set of X.
+         *          or pushing everything to overflow and mark DONE.
          */
         enum State { CONFIGURED, SIEVING, TESTING, FINAL, DONE };
         State state = CONFIGURED;
@@ -197,8 +201,13 @@ class SieveHolder {
         size_t current_index = 0;
         std::unique_ptr<GPUSieve> sieve;
 
-        // TODO will track the number of items in this associated with a DataM
-        size_t open_m = 0;
+        // Tracks the number of DataM associated with this SieveHolder.
+        std::atomic<size_t> open_m = 0;
+
+        // Tracks the number of m for the next interval.
+        std::atomic<size_t> next_m = 0;
+
+        // TODO track number of m per generation (and maybe GPU time?)
 
         // Open questions:
         //  When Prime how do you mark as "done"
@@ -219,15 +228,17 @@ class DataM {
 
         // READY means that load thread should pull next unknown and run it
         // RUNNING means that next unknown is currently running on GPU
-        // NO_X means no more unknowns in GPUSieve to test.
         // OVERFLOWED means that load thread ran out of unknowns to load
         // SIEVING means that cpu sieve thread is currently processing
         // PRIMED means that a prime endpoint (next_p or prev_p has just been found)
-        enum State : uint8_t { READY, RUNNING, NO_X, OVERFLOWED, SIEVING, PRIMED};
+        enum State : uint8_t { READY, RUNNING, OVERFLOWED, SIEVING, PRIMED};
         State state = READY;
 
         enum Side : uint8_t { NEXT_P, PREV_P };
         Side side = NEXT_P;
+
+        SieveHolder *parent;
+        int32_t mii;  // index into parent->sieve->m_inc, -1 for PREV_P
 
         mpz_t center;
         int32_t unknown_start[2] = {0, 0};
@@ -276,7 +287,7 @@ class GPUBatch {
         vector<int>  result;
 
         // Intervals for each element
-        vector<DataM*> intervals; // TODO was data_m
+        vector<DataM*> intervals;
 
         // index into the interval.unknowns
         vector<int> unknown_i;
@@ -420,27 +431,36 @@ void run_sieve_thread(void) {
                 continue;
             }
 
-            auto M_end = to_sieve->config.mstart + to_sieve->config.minc;
+            auto& config = to_sieve->config;
+            auto M_end = config.mstart + config.minc;
             auto s_start_t = high_resolution_clock::now();
 
-            to_sieve->config.threads = COMBINED_SIEVE_THREADS;
-            to_sieve->config.verbose -= 3;
+            config.threads = COMBINED_SIEVE_THREADS;
+            config.verbose -= 3;
             to_sieve->state = SieveHolder::SIEVING;
-            auto sieve = std::make_unique<GPUSieve>(to_sieve->config);
-            sieve->run(to_sieve->config);
 
-            to_sieve->config.verbose += 3;
+            if (to_sieve->sieve) {
+                to_sieve->sieve->update();
+            } else {
+                to_sieve->sieve = std::make_unique<GPUSieve>(config);
+            }
+            to_sieve->sieve->run(config);
+            // Reset SieveHolder state
+            to_sieve->current_index = 0;
+            to_sieve->open_m = 0;
+            to_sieve->next_m = 0;
+
+            config.verbose += 3;
 
             auto s_stop_t = high_resolution_clock::now();
             printf("\tCombined Sieve (%ldM to %ldM) took %.1f seconds\n",
-                   to_sieve->config.mstart / 1'000'000, M_end / 1'000'000,
+                   config.mstart / 1'000'000, M_end / 1'000'000,
                    duration<double>(s_stop_t - s_start_t).count());
 
             lock.lock();
             if (queue_new_work) {
                 cout << "Setting state to TESTING" << endl;
                 to_sieve->state = SieveHolder::TESTING;
-                to_sieve->sieve.swap(sieve);
             } else {
                 to_sieve->state = SieveHolder::DONE;
             }
@@ -582,10 +602,10 @@ size_t add_to_processing(
     }
 
     const GPUSieve& sieve = *(holder->sieve);
-
-    // Max coprime_X that was processed in this batch of GPUSieve
-    int32_t max_X = sieve.max_X;
     const auto& coprime_X = sieve.coprime_X;
+    // For all the bits set in m_unknown_deltas
+    const int32_t offset = sieve.unknown_X0;
+
 
     size_t added = 0;
 
@@ -606,11 +626,8 @@ size_t add_to_processing(
         assert( gcd(m, D) == 1 );
 
         added += 1;
-        interval.reset(new DataM(m, max_X));
+        interval.reset(new DataM(m, holder->config.sieve_length));
         interval->unknowns[1].reserve(32);
-
-        // For all the bits set in m_unknown_deltas
-        int32_t offset = sieve.unknown_X0;
 
         while (m_unknown_deltas) {
             int32_t i = ffsl(m_unknown_deltas) - 1;
@@ -625,16 +642,19 @@ size_t add_to_processing(
         mpz_init(interval->center);
         mpz_mul_ui(interval->center, K, interval->m);
 
+        interval->parent = holder;
+        interval->mii = index;
+
         if (index+1 == sieve.m_inc.size()) {
             std::lock_guard lock(sieve_mtx);
-            // TODO who marks this as DONE?
             holder->state = SieveHolder::FINAL;
+            printf("Set m_start: %lu as FINAL\n", sieve.M_start);
             break;
         }
     }
 
-    printf("Added %lu from m_start: %lu @ index: %lu/%lu\n",
-        added, sieve.M_start, holder->current_index, sieve.m_inc.size());
+    //printf("Added %lu from m_start: %lu index is now %lu/%lu\n",
+    //    added, sieve.M_start, holder->current_index, sieve.m_inc.size());
 
     // No one else will be competing for this field so save to write without lock.
     holder->open_m += added;
@@ -686,7 +706,22 @@ bool process_finished_batch(GPUBatch& batch) {
                 assert(interval.next_p == 0);
                 interval.n_found = true;
                 interval.next_p = found_offset;
+
+                // No longer an open_m for combined sieve
+                assert( interval.parent != nullptr );
+                // No thead contention so safe
+                interval.parent->sieve->m_inc[interval.mii] = std::numeric_limits<uint32_t>::max();
+                // Atomic so no lock needed.
+                interval.parent->open_m--;
             }
+
+            /* It's not that wrong things are marked, it's that things are missed :/
+            if( !mpz_probab_prime_p(*batch.z[i], 25) ) {
+                gmp_printf("\n\nNOT PRIME: %lu * P#/d + %lu (side: %lu)\n",
+                        interval.m, found_offset, interval.side);
+                assert(false);
+            }
+            */
             interval.state = DataM::State::PRIMED;
             found_any_primes = true;
         }
@@ -718,7 +753,7 @@ void fill_batch(
     bool any_pushed_to_overflow = false;
     {
         std::lock_guard lock(interval_mtx);
-        for (const auto& row : processing) {
+        for (auto& row : processing) {
             if (!row) {
                 num_tombstoned += 1;
                 continue;
@@ -742,13 +777,14 @@ void fill_batch(
             int32_t offset = 0;
             if (side == DataM::Side::NEXT_P) {
                 assert(!interval.n_found);
-                // TODO this isn't quite the same logic anymore.
-                // DataM is maybe still OVERFLOWED but not to OVERFLOWED QUEUE
                 if (interval.n_index == interval.unknowns[1].size()) {
-                    interval.state = DataM::State::NO_X;
-                    //stats.s_gap_out_of_sieve_next += 1;
-                    //overflowed.push_back(row.get());
-                    //any_pushed_to_overflow = true;
+                    // Out of unknowns without finding a prime,
+                    // Mark as next_m and reset this interval
+                    assert( interval.parent != nullptr );
+                    interval.parent->open_m--;
+                    interval.parent->next_m++;
+                    row.reset();
+
                     continue;
                 }
                 index = interval.n_index++;
@@ -977,7 +1013,6 @@ void create_gpu_batches(const struct Config og_config) {
                         continue;
                     }
 
-                    // TODO decrement open_m from one of the SieveHolders
                     // Could strictly speaking do all of the primed work at the end now?
                     // less realtime but easier to code?
 
@@ -998,6 +1033,10 @@ void create_gpu_batches(const struct Config og_config) {
                             stats.s_gap_out_of_sieve_prev += 1;
                             interval.side = DataM::Side::PREV_P;
                             interval.state = DataM::State::OVERFLOWED;
+                            // Parent no longer exists and mii isn't relevant
+                            interval.parent = nullptr;
+                            interval.mii = -1;
+
                             overflowed.push_back(row.get());
                             //cout << "PREV_P for m=" << interval.m << endl;
                             any_pushed_to_overflow = true;
@@ -1083,6 +1122,23 @@ void create_gpu_batches(const struct Config og_config) {
     }
 }
 
+// Should only be called while holding sieve_mtx
+void process_any_finals() {
+    for (auto& sieved : sieveds) {
+        if (sieved->state == SieveHolder::FINAL) {
+            printf("FINAL has %lu open %lu next\n", sieved->open_m.load(), sieved->next_m.load());
+            if (sieved->open_m == 0) {
+                // TODO push to OVERFLOW if small number of next_m.
+                if (sieved->next_m == 0) {
+                    sieved->state = SieveHolder::DONE;
+                } else {
+                    sieved->state = SieveHolder::CONFIGURED;
+                }
+            }
+        }
+    }
+}
+
 void coordinator_thread(struct Config global_config) {
     try {
         pthread_setname_np(pthread_self(), "COORDINATOR");
@@ -1095,6 +1151,9 @@ void coordinator_thread(struct Config global_config) {
 
             std::unique_ptr<SieveHolder> to_test = nullptr;
             lock.lock();
+
+            process_any_finals();
+
             if (queue_new_work) {  // Add new configs to sieveds queue.
                 int needed = 2;
                 int finished = 0;
