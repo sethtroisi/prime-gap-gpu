@@ -1128,8 +1128,9 @@ void process_any_finals() {
         if (sieved->state == SieveHolder::FINAL) {
             printf("FINAL has %lu open %lu next\n", sieved->open_m.load(), sieved->next_m.load());
             if (sieved->open_m == 0) {
-                // TODO push to OVERFLOW if small number of next_m.
-                if (sieved->next_m == 0) {
+                // TODO make this configurable or something.
+                if (sieved->next_m * 200 == sieved->config->m_inc) {
+                    // Push everything remaining to overflow
                     sieved->state = SieveHolder::DONE;
                 } else {
                     sieved->state = SieveHolder::CONFIGURED;
