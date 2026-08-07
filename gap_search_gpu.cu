@@ -122,10 +122,10 @@ void prime_gap_test(const struct Config config);
 
 
 int main(int argc, char* argv[]) {
-    Config config = Args::argparse(argc, argv, Args::Pr::TEST_GPU);
+    Config config = Args::argparse(argc, argv, Args::Pr::SEARCH_GPU);
 
     if (config.valid == 0) {
-        Args::show_usage(argv[0], Args::Pr::TEST_GPU);
+        Args::show_usage(argv[0], Args::Pr::SEARCH_GPU);
         return 1;
     }
 
@@ -134,29 +134,9 @@ int main(int argc, char* argv[]) {
             __GNU_MP_VERSION, __GNU_MP_VERSION_MINOR, __GNU_MP_VERSION_PATCHLEVEL);
     }
 
-    if (config.sieve_length == 0) {
-        cout << "Must set sieve-length for " << argv[0] << endl;
-        Args::show_usage(argv[0], Args::Pr::TEST_GPU);
-        return 1;
+    if (100'000 < config.max_prime && config.max_prime > 4'000'000'000) {
+        printf("\tmax_prime(%'ld) should be between 100K and 4B\n", config.max_prime);
     }
-
-    if (config.sieve_length < 11 * config.p || config.sieve_length > 22 * config.p) {
-        int sl_min = ((config.p * 12 - 1) / 500 + 1) * 500;
-        int sl_max = ((config.p * 20 - 1) / 500 + 1) * 500;
-        printf("--sieve_length(%d) should be between [%d, %d]\n",
-            config.sieve_length, sl_min, sl_max);
-        return 1;
-    }
-
-    if (100'000 < config.max_prime && config.max_prime > 500'000'000) {
-        printf("\tmax_prime(%'ld) should be between 100K and 500M\n", config.max_prime);
-    }
-
-    if (config.compression != 0) {
-        cout << argv[0] << " Doesn't support any compression options." << endl;
-        return 1;
-    }
-
 
     setlocale(LC_NUMERIC, "");
     if (config.verbose >= 0) {
@@ -164,15 +144,12 @@ int main(int argc, char* argv[]) {
         printf("Testing m * %d#/%d\n", config.p, config.d);
     }
 
-    if (config.mskip != 0) {
+    if (config.m_skip != 0) {
         cout << "Use m_start not mskip" << endl;
         return 1;
     }
 
     setlocale(LC_NUMERIC, "C");
-
-    // Delete unknown_fn so it gets recreated by sieve
-    config.unknown_filename = "";
 
     prime_gap_test(config);
 
@@ -221,10 +198,9 @@ class DataM {
          * Elements in READY state can ONLY be modified by load_thread
          * Elements in RUNNING are either part of a GPU batch in overflowed queue
          */
-        DataM(long m, unsigned short sl): m(m), sieve_length(sl) {};
+        DataM(long m): m(m) {};
 
         const long m;
-        const unsigned short sieve_length = 0;
 
         // READY means that load thread should pull next unknown and run it
         // RUNNING means that next unknown is currently running on GPU
@@ -234,29 +210,22 @@ class DataM {
         enum State : uint8_t { READY, RUNNING, OVERFLOWED, SIEVING, PRIMED};
         State state = READY;
 
-        enum Side : uint8_t { NEXT_P, PREV_P };
-        Side side = NEXT_P;
-
         SieveHolder *parent;
-        int32_t mii;  // index into parent->sieve->m_inc, -1 for PREV_P
+        int32_t mii;  // index into parent->sieve->m_inc
 
         mpz_t center;
         int32_t unknown_start[2] = {0, 0};
-        vector<int32_t> unknowns[2];
+        vector<int32_t> unknowns;
         // Index into unknowns
         uint8_t p_index = 0;
-        uint8_t n_index = 0;
 
         bool p_found = false;
-        bool n_found = false;
 
         // Both are recored as positive
         int prev_p = 0;
-        int next_p = 0;
 
         // Number of tests made so far
         size_t p_tests = 0;
-        size_t n_tests = 0;
 };
 
 
@@ -432,10 +401,9 @@ void run_sieve_thread(void) {
             }
 
             auto& config = to_sieve->config;
-            auto M_end = config.mstart + config.minc;
+            auto M_end = config.m_start + config.m_inc;
             auto s_start_t = high_resolution_clock::now();
 
-            config.threads = COMBINED_SIEVE_THREADS;
             config.verbose -= 3;
             to_sieve->state = SieveHolder::SIEVING;
 
@@ -454,7 +422,7 @@ void run_sieve_thread(void) {
 
             auto s_stop_t = high_resolution_clock::now();
             printf("\tCombined Sieve (%ldM to %ldM) took %.1f seconds\n",
-                   config.mstart / 1'000'000, M_end / 1'000'000,
+                   config.m_start / 1'000'000, M_end / 1'000'000,
                    duration<double>(s_stop_t - s_start_t).count());
 
             lock.lock();
@@ -517,9 +485,9 @@ void run_overflow_thread(const mpz_t &K_in) {
                 DataM& interval = *overflowed.front(); overflowed.pop_front();
                 assert(interval.state == DataM::State::OVERFLOWED);
                 interval.state = DataM::State::SIEVING;
+                /*
 
                 int32_t sieve_start = 0;
-                int32_t sl = interval.sieve_length;
 
                 if (interval.side == DataM::Side::PREV_P) {
                     assert( interval.prev_p == 0 );
@@ -561,6 +529,7 @@ void run_overflow_thread(const mpz_t &K_in) {
                     assert( interval.unknowns[1].front() < interval.unknowns[1].back() );
                     assert( interval.unknowns[1].back() < sieve_start + sl );
                 }
+                */
 
                 interval.state = DataM::State::READY;
                 tested += 1;
@@ -626,14 +595,14 @@ size_t add_to_processing(
         assert( gcd(m, D) == 1 );
 
         added += 1;
-        interval.reset(new DataM(m, holder->config.sieve_length));
-        interval->unknowns[1].reserve(32);
+        interval.reset(new DataM(m));
+        interval->unknowns.reserve(32);
 
         while (m_unknown_deltas) {
             int32_t i = ffsl(m_unknown_deltas) - 1;
             assert( m_unknown_deltas & (1 << i) );
             m_unknown_deltas ^= 1 << i;
-            interval->unknowns[1].push_back(coprime_X[offset + i]);
+            interval->unknowns.push_back(coprime_X[offset + i]);
         }
         // TODO track the number of remaining unknowns?
         // Should this happen here or somewhere else?
@@ -842,7 +811,7 @@ void fill_batch(
 }
 
 
-void create_gpu_batches(const struct Config og_config) {
+void testing_thread(const struct Config og_config) {
     // gap / 2 up to 60 merit
     uint64_t distance_counts[10000] = {};
 
@@ -865,15 +834,15 @@ void create_gpu_batches(const struct Config og_config) {
         if (og_config.verbose >= 1) {
             setlocale(LC_NUMERIC, "");
             // ----- Merit / Sieve stats
-            float m_log = log(og_config.minc);
+            float m_log = log(og_config.m_inc);
                 printf("Min Gap ~= %'d (for merit > %.1f)\n",
                     (int) (min_merit * (K_log + m_log)), min_merit);
                 printf("Min Gap to continue ~= %'d (for merit = %.1f)\n",
                     (int) (MIN_MERIT_TO_CONTINUE * (K_log + m_log)),
                     MIN_MERIT_TO_CONTINUE);
 
-            const uint64_t M_start = og_config.mstart;
-            const uint64_t M_inc = og_config.minc;
+            const uint64_t M_start = og_config.m_start;
+            const uint64_t M_inc = og_config.m_inc;
             uint64_t valid_ms = count_num_m(M_start, M_inc, D);
             assert(valid_ms > 0 && valid_ms <= M_inc);
             printf("\nTesting ranges of %'ld ~ %'ld m per range.\n\n", M_inc, valid_ms);
@@ -1116,7 +1085,7 @@ void create_gpu_batches(const struct Config og_config) {
             i++;
         }
     } catch (const std::exception &e) {
-        cout << "ERROR in create_gpu_batches" << endl;
+        cout << "ERROR in testing_thread" << endl;
         cout << e.what() << endl;
         is_running = false;
     }
@@ -1180,15 +1149,15 @@ void coordinator_thread(struct Config global_config) {
                     if (global_config.verbose >= 3) {
                         printf("\tQueued(%lu) %'lu to %'lu\n",
                                 total_ranges,
-                                global_config.mstart,
-                                global_config.mstart + global_config.minc);
+                                global_config.m_start,
+                                global_config.m_start + global_config.minc);
                     }
 
                     sieveds.emplace_back(std::make_unique<SieveHolder>(global_config));
                     needed -= 1;
                     total_ranges += 1;
 
-                    global_config.mstart += global_config.minc;
+                    global_config.m_start += global_config.minc;
                 }
             }
 
@@ -1243,7 +1212,7 @@ void prime_gap_test(struct Config config) {
     {
         init_K(config, K);
         // +4 is just is personal safety blanket buffer.
-        size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.mstart + 100ul * config.minc) + 4;
+        size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.m_start + 100ul * config.m_inc) + 4;
 
         // P# roughly 349, 709, 1063, 1447
         for (size_t bits : {512, 1024, 1536, 2048, 3036, 4096}) {
@@ -1267,19 +1236,43 @@ void prime_gap_test(struct Config config) {
     signal(SIGINT, signal_callback_handler);
 
     /**
-     * coordinator_thread: creates configs and adds them to queue
-     * sieve_thread: reads configs from ^ queue and runs combined_sieve_small
+     * globals:
+     *      overflow_m: queue<uint64_t>
+     *          m values where GPU never found next_prime (e.g. at least medium merit)
+     *      active_m: uint8_t[M_inc]
+     *          read_only by sieve_thread
+     *          marked off by gpu_thread
+     *      sieve_state: state
+     *      gpu_state: state
+     *      current X or something?
      *
-     * batch_thread: reads SieveHolder's and creates GPU batches
-     * gpu_thread: runs the GPU batches.
+     * coordinator_thread
+     *      * when GPU goes to 'DONE' (when not many left)
+     *          * read active m and add to overflow_m
+     *          * update m_start
+     *          * reset active_m
      *
-     * overflow_sieve_thread: computes extra sieves for prev_p and overflowed next_p
+     * sieve_thread: launches sieve kernel per X
+     *      * takes current list of active M
+     *      * sets those as active in GPU
+     *      * asks GPU to mark off composites
+     *      * passes list of not-composite numbers (X, <array m>) to GPU
+     *      * starts on next X
+     *          * This will test 5-15% extra "active" m but that's fine
+     *          * Someone (GPU thread?) removes them before starting prime testing
+     *
+     * gpu_thread: lauches prime testing kernel
+     *      * owns the list of active M
+     *      * takes list of (X, <array m>) and tests
+     *      * marks some numbers as not active
+     *      * keeps the list
+     *
+     * overflow_sieve_thread: handles largest m per block
      *
      */
     std::thread main_thread(coordinator_thread, config);
-    std::thread sieve_thread(run_sieve_thread);
-
-    std::thread batch_thread(create_gpu_batches, config);
+    std::thread sieve_thread(run_sieve_thread, config);
+    std::thread testing_thread(testing_thread, config);
     std::thread overflow_sieve_thread(run_overflow_thread, std::ref(K));
 
     main_thread.join();

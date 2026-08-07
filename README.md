@@ -33,4 +33,6 @@ $ git clone https://github.com/sethtroisi/prime-gap-gpu.git
 $ cd prime-gap-gpu
 ```
 
+## TODO
 
+ * [ ] `save_partial_at_exit` save offset (and what merit this represents) + currently active M.

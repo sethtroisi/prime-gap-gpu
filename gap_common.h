@@ -39,31 +39,17 @@ struct Config {
     uint32_t p       = 0;
     uint32_t d       = 0;
 
-    uint64_t mstart  = 0;
-    uint64_t minc    = 0;
+    uint64_t m_start  = 0;
+    uint64_t m_inc    = 0;
     // Only for testers, skip m < mskip
-    uint64_t mskip   = 0;
+    uint64_t m_skip   = 0;
 
     float min_merit = 18;
 
-    uint32_t sieve_length = 0;
     uint64_t max_prime    = 0;
 
-    bool save_unknowns = false;
-
-    bool method1 = false;
-
-    /**
-     * 0: all offsets in plain tex (-2, -4, -8, ...| +2, +4, +8, ...)
-     * 1: run length encoding (delta to next offset)
-     * 2: bitmap over all X coprime to (m * k)
-     */
-    int compression = 0;
-
-    int threads = 1;
-
-    // Max number of GB allowed (has ~10% error)
-    int max_mem = 10;
+    // GPU memory in MB allowed (probably ~10% error)
+    int max_gpu_mem_mb = 4'000;
 
     /**
      * -1: results only
@@ -79,18 +65,13 @@ struct Config {
 
     // Secret option for testing code
     bool testing = false;
-
-    string unknown_filename;
-
-    string search_db  = "prime-gap-search.db";
-    string gaps_db = "gaps.db";
 };
 
 
 class Args
 {
     public:
-        enum Pr { SIEVE, STATS, TEST_SIMPLE, TEST_GPU };
+        enum Pr { SEARCH_GPU };
 
         static void show_usage(char* name, Pr program);
         static Config argparse(int argc, char* argv[], Pr program);
@@ -165,31 +146,7 @@ size_t count_num_m(long ms, long mi, uint64_t d);
 std::pair<vector<bool>, vector<uint32_t>>
     is_coprime_and_valid_m(const struct Config& config);
 
-
-std::pair<uint64_t, uint64_t> calculate_thresholds_method2(
-        struct Config config,
-        size_t count_coprime_sieve,
-        size_t valid_ms);
-
-
-double prp_time_estimate_composite(double K_log, int verbose);
-
-double combined_sieve_method2_time_estimate(
-        const struct Config& config,
-        const mpz_t &K,
-        uint64_t valid_ms,
-        double prp_time_est);
-
-
-
-// Used to optimize d
-std::tuple<uint32_t, double, uint32_t, double, double>
-count_K_d(const struct Config& config);
-
 double prob_prime_and_stats(const struct Config& config, mpz_t &K);
-
-double prob_prime_coprime(const struct Config& config);
-
 
 /* Prime Stuff */
 
