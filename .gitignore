@@ -1,13 +1,6 @@
 
 # Programs
-combined_sieve
-combined_sieve_small
-gap_stats
-gap_stats_missing
-gap_test_simple
-gap_test_gpu
-benchmark
-benchmark_google
+gap_search_gpu
 *.o
 a.out
 

@@ -13,10 +13,8 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o modulo_search.o gap_test_common.o
-OUT	= combined_sieve combined_sieve_small \
-	  gap_stats gap_test_simple gap_test_gpu \
-	  benchmark benchmark_google
+OBJS	= gap_common.o gap_test_common.o
+OUT	= gap_search_gpu
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
 NVCC	= nvcc
@@ -27,15 +25,7 @@ BITS    = 1024
 
 LDFLAGS	= -lgmp -lprimesieve
 # Need for local gmp / primesieve
-LDFLAGS+= -L /usr/local/lib
-
-DEFINES =
-ifdef VALIDATE_FACTORS
-DEFINES += -DGMP_VALIDATE_FACTORS
-endif
-ifdef VALIDATE_LARGE
-DEFINES += -DGMP_VALIDATE_LARGE_FACTORS
-endif
+#LDFLAGS+= -L /usr/local/lib
 
 all: $(OUT)
 
@@ -46,32 +36,11 @@ sieve_small.o: sieve_small.cu
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
-combined_sieve: combined_sieve.cpp $(OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(DEFINES)
-
-combined_sieve_small: combined_sieve_small.cu $(OBJS) sieve_small.o
+gap_search_gpu: gap_search_gpu.cu gap_common.o gap_test_common.o sieve_small.o
 	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
 		$(CUDA_FLAGS) \
 		-I../CGBN/include \
 		$(LDFLAGS)
-
-gap_stats: gap_stats.cpp gap_common.o
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
-
-gap_test_simple: gap_test_simple.cpp gap_common.o gap_test_common.o
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
-
-gap_test_gpu: gap_test_gpu.cu gap_common.o gap_test_common.o sieve_small.o
-	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
-		$(CUDA_FLAGS) \
-		-I../CGBN/include \
-		$(LDFLAGS)
-
-benchmark: misc/benchmark.cpp modulo_search.o
-	$(CC) -o $@ $^ $(CFLAGS) -lprimesieve $(LDFLAGS) -I.
-
-benchmark_google: misc/benchmark_google.cpp modulo_search.o
-	$(CC) -o $@ $^ $(CFLAGS) -std=c++14 -lprimesieve -lbenchmark -lpthread -I.
 
 .PHONY: all clean
 
