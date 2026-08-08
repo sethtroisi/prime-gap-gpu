@@ -131,6 +131,7 @@ uint64_t gcd(uint64_t a, uint64_t b);
 
 
 /* K stuff */
+double _log(const mpz_t &K);
 double calc_log_K(const struct Config& config);
 
 void init_K(const struct Config& config, mpz_t &K);
