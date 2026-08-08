@@ -522,7 +522,11 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         cout << "m_inc must be less than 2B " << config.m_inc << endl;
     }
 
-    if (config.max_prime > 4'000'000) {
+    if (config.max_prime < 1'000) {
+        config.valid = 0;
+        cout << "max_prime must be set" << endl;
+    }
+    if (config.max_prime > 4'000'000'000) {
         config.valid = 0;
         cout << "max_prime > 4B not supported" << endl;
     }
