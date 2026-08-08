@@ -97,11 +97,13 @@ bool StatsCounters::possible_print_stats(
                     s_tests, secs / s_tests, secs);
             }
 
+            /*
             printf("\t    unknowns  %-10ld (avg: %.2f), %.2f%% composite  %.2f%% <- %% -> %.2f%%\n",
                 s_total_unknown, s_total_unknown / ((double) s_tests),
                 100.0 * (1 - s_t_unk_next / ((double) config.sieve_length * s_tests)),
                 100.0 * s_t_unk_prev / s_total_unknown,
                 100.0 * s_t_unk_next / s_total_unknown);
+                */
             printf("\t    prp tests %-10ld (avg: %.2f) (%.1f tests/sec)\n",
                 s_total_prp_tests,
                 s_total_prp_tests / (float) s_tests,

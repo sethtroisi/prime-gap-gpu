@@ -37,18 +37,9 @@ class GPUSieve {
         GPUSieve(const struct Config& config);
         ~GPUSieve();
 
-        vector<uint16_t> coprime_X;
-
         uint64_t M_start;
         // mi for m being considered, set to 0xFFFFFFFF to delete in next pass.
         vector<uint32_t> m_inc;
-
-        /**
-         * 32 bits of "unknowns"
-         * 0th bit is coprime_X[unknown_X0], 1st bit is coprime_X[unknown_X0+1] ...
-         */
-        uint16_t unknown_X0;
-        vector<uint32_t> unknowns;
 
         void update();
         void run(const struct Config& config);
@@ -65,12 +56,8 @@ class GPUSieve {
         int64_t  *thread_stats;
 
         // Cache stuff
-        uint32_t num_coprimes;
-        uint16_t *test_X;
 
         char     *is_coprime2310;
-        char     *is_m_coprime2310;
-        int32_t  *m_reindex;
 
         // Cached prime stuff
         uint32_t num_primes;
@@ -79,22 +66,14 @@ class GPUSieve {
         // uint32_t *remainders; // r = K mod p
         int32_t *neg_inv_Ks;  // r^1 mod p
 
-        // Maybe later? is_m_coprime
         char *composite;
         size_t composite_bytes;
         /**** END GPU POINTERS ****/
 
         // Host side
-
-        const size_t composite_segment_size = 30'000'000;
         size_t host_composite_bytes;
         char* host_composite;
-        vector<int32_t> host_reindex;
 
         mpz_t K;
         uint32_t K_mod2310;
-
-        // TODO implement this
-        uint64_t M_start_check;
-
 };

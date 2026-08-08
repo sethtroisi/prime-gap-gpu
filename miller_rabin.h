@@ -369,7 +369,8 @@ class test_runner_t {
             exit(1);
           }
 
-          for (size_t i = 0; i < tests.size(); i++) {
+          uint32_t to_run = std::min<>(active, tests.size());
+          for (size_t i = 0; i < to_run; i++) {
               assert( mpz_odd_p(*tests[i]) );
               assert( mpz_cmp_ui(*tests[i], 1) > 0);
               from_mpz(*tests[i], instances[i].candidate._limbs, params::BITS/32);
@@ -387,7 +388,7 @@ class test_runner_t {
           kernel_miller_rabin<params><<<blocks, TPB, 0, runner_stream>>>(
                   report,
                   gpuInstances,
-                  std::min<>(active, tests.size()),
+                  to_run,
                   gpuPrimes,
                   rounds);
 
