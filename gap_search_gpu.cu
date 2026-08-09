@@ -465,7 +465,9 @@ void run_sieve_thread(void) {
             assert(!unknowns_i.empty());
 
             auto s_stop_t = high_resolution_clock::now();
-            if ((config.verbose + (current_x <= 2)) >= 2) {
+            if ((config.verbose
+                        + (current_x <= 2)
+                        + (config.m_start <= 1'000'000)) >= 3) {
                 printf("\tGPU Sieve (%ldM to %ldM) @X=%lu with %ld/%ld unknown/active took %.1f seconds \n",
                        config.m_start / 1'000'000, M_end / 1'000'000,
                        current_x, unknowns_i.size(), local_active_m_i.size(),
@@ -554,14 +556,14 @@ void run_overflow_thread(const mpz_t &K_in) {
                     double merit = gap / (K_log + log(m));
                     if (merit > min_merit) {
                         // Double check, we only performed a single round of rabin miller on many numbers.
-                        mpz_sub_ui(prev_p, center, prev_gap)
+                        mpz_sub_ui(prev_p, center, prev_gap);
                         mpz_nextprime(next_p, prev_p);
                         mpz_sub(next_p, next_p, prev_p);
                         uint64_t test_gap = mpz_get_ui(next_p);
                         if (test_gap != gap) {
-                            printf("ERROR! %lu vs %lu at %lu * %u# / %u - %lu "
+                            printf("GAP MISMATCH! %lu vs %lu at %lu * %u# / %u - %lu "
                                     "(could always be from 1 round of miller-rabin)\n",
-                                    test_gap, gap, m, config.p, config.d, prev_gap)
+                                    test_gap, gap, m, config.p, config.d, prev_gap);
                         }
 
                         printf("%lu %.3f %lu * %u# / %u - %lu\n",
@@ -654,6 +656,7 @@ void setup_sieve_data() {
     sieve_data->found_prime_m_i.resize((sieve_data->config.m_inc + 7) / 8 + 1, 0);
 
     const auto &config = sieve_data->config;
+    // TODO use is_coprime_and_valid_m
     for (uint64_t m_i = 0; m_i < config.m_inc; m_i++) {
         uint64_t m = config.m_start + m_i;
         // Check if divisibly by any factor of D
@@ -854,9 +857,9 @@ void run_testing_thread(const struct Config og_config) {
             assert(count_valid_m > 0 && count_valid_m <= M_inc);
             //printf("\nTesting ranges of %'ld ~ %'ld m per range.\n\n", M_inc, count_valid_m);
             setlocale(LC_NUMERIC, "C");
-        }
 
-        printf("\tStarting to create GPU Batches\n");
+            //printf("\tStarting to create GPU Batches\n");
+        }
 
         // Used for various stats
         StatsCounters stats(high_resolution_clock::now());

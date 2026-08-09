@@ -72,15 +72,6 @@ static const std::map<uint64_t,uint64_t> common_primepi = {
 };
 
 
-bool has_prev_prime_gmp() {
-    return (
-        (__GNU_MP_VERSION > 6) ||
-        (__GNU_MP_VERSION == 6 && __GNU_MP_VERSION_MINOR >= 3) ||
-        (__GNU_MP_VERSION == 6 && __GNU_MP_VERSION_MINOR == 2 && __GNU_MP_VERSION_PATCHLEVEL == 99)
-    );
-}
-
-
 uint64_t gcd(uint64_t a, uint64_t b) {
     if (b == 0) return a;
     return gcd(b, a % b);

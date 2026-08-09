@@ -114,18 +114,7 @@ class BitArrayHelper {
         uint32_t SL_mod_d;
 };
 
-int64_t parse_unknown_line(
-        const struct Config& config,
-        const BitArrayHelper& helper,
-        uint64_t m_expected,
-        std::istream& input_line,
-        vector<int32_t>& unknown_prev,
-        vector<int32_t>& unknown_next);
-
-
 /* Random Utils */
-
-bool has_prev_prime_gmp();
 
 uint64_t gcd(uint64_t a, uint64_t b);
 
