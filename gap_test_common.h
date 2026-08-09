@@ -30,7 +30,6 @@ using std::cout;
 using std::endl;
 using std::vector;
 
-/** See gap_test_stats.py */
 class StatsCounters {
     public:
         StatsCounters(std::chrono::high_resolution_clock::time_point now) : s_start_t(now) {}
@@ -38,11 +37,6 @@ class StatsCounters {
         const std::chrono::high_resolution_clock::time_point s_start_t;
 
         uint64_t  s_tests     = 0;
-
-        /* Counters for unknowns after sieve */
-        uint64_t    s_total_unknown = 0;
-        uint64_t    s_t_unk_prev = 0;
-        uint64_t    s_t_unk_next = 0;
 
         /* PRP counter */
         uint64_t    s_total_prp_tests = 0;
@@ -66,29 +60,11 @@ class StatsCounters {
         /** Return if stats were printed */
         void process_results(
             const Config &config,
-            long m, bool is_last,
-            size_t unknown_l, size_t unknown_u,
+            long m,
             int prev_p, int next_p,
             int p_tests, int n_tests,
             float merit);
 
         bool possible_print_stats(
-            const Config &config,
-            long m, bool is_last,
-            size_t unknown_l, size_t unknown_u,
-            int prev_p, int next_p) const;
+            const Config &config) const;
 };
-
-void test_interval_cpu(
-        const uint64_t m, const mpz_t &K, const size_t SIEVE_LENGTH,
-        size_t &s_total_prp_tests,
-        size_t &s_gap_out_of_sieve_prev, size_t &s_gap_out_of_sieve_next,
-        vector<int32_t> (&unknowns)[2],
-        int &prev_p, int &next_p);
-
-void sieve_interval_cpu(
-        const uint64_t m, const mpz_t &K,
-        const vector<std::pair<uint32_t, uint32_t>> p_and_r,
-        const int32_t sieve_start, const int32_t sieve_length,
-        vector<int32_t> &unknowns);
-

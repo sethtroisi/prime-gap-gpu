@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -26,16 +25,12 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <queue>
-#include <ranges>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 // pthread_setname_np
@@ -501,6 +496,7 @@ void run_overflow_thread(const mpz_t &K_in) {
         mpz_init(next_p);
         mpz_init(prev_p);
 
+        StatsCounters stats(high_resolution_clock::now());
         struct Config config = sieve_data->config;
 
         double K_log = calc_log_K(config);
@@ -532,8 +528,8 @@ void run_overflow_thread(const mpz_t &K_in) {
             overflow_cv.wait(lock, []{ return overflowed.size() || !is_running; });
 
             while (is_running && overflowed.size()) {
-                // 16K batch might dump 160-400 per batch.
-                if (tested % 10'000 == 0 && overflowed.size() > 1000) {
+                // process_results does most printing. This is to gauge overflow size.
+                if (tested % 1'000 == 0 && overflowed.size() > 50'000) {
                     printf("\tCPU Sieve Queue: %lu open, %lu processed\n",
                             overflowed.size(), tested);
                 }
@@ -548,12 +544,18 @@ void run_overflow_thread(const mpz_t &K_in) {
                 mpz_sub(next_p, next_p, center);
                 uint64_t next_gap = mpz_get_ui(next_p);
 
-                if (next_gap > MIN_GAP_TO_CONTINUE) {
+                if (next_gap < MIN_GAP_TO_CONTINUE) {
+                    double merit = next_gap / (K_log + log(m));
+                    stats.process_results(config, m, 0, next_gap, 0, 1, merit);
+                    stats.s_skips_after_one_side += 1;
+                } else {
                     mpz_prevprime(prev_p, center);
                     mpz_sub(prev_p, center, prev_p);
                     uint64_t prev_gap = mpz_get_ui(prev_p);
                     uint64_t gap = prev_gap + next_gap;
                     double merit = gap / (K_log + log(m));
+                    stats.process_results(config, m, prev_gap, next_gap, 1, 1, merit);
+
                     if (merit > min_merit) {
                         // Double check, we only performed a single round of rabin miller on many numbers.
                         mpz_sub_ui(prev_p, center, prev_gap);
@@ -719,7 +721,7 @@ void increment_X() {
 
 
 /** sieve_mtx must be held while calling */
-void push_to_overflow_and_increment_M_range() {
+void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
     // TODO refactor this out of increment_X
     for (auto m_i : sieve_data->newly_prime_m_i) {
         sieve_data->found_prime_m_i[m_i >> 3] |= 1 << (m_i & 7);
@@ -742,6 +744,9 @@ void push_to_overflow_and_increment_M_range() {
     for (uint32_t m_i : sieve_data->active_m_i) {
         overflowed.push_back({m_start + m_i, min_X});
     }
+    stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
+    stats.s_tests += 1;
+    stats.possibly_print_stats(config, m_start + m_inc - 1, 0, 0);
 
     sieve_data->config.m_start += m_inc;
     sieve_data->state = SieveData::State::NEW;
@@ -758,8 +763,7 @@ void push_to_overflow_and_increment_M_range() {
 void fill_batch(
         uint32_t batch_i,
         GPUBatch& batch,
-        const mpz_t &K,
-        StatsCounters& stats) {
+        const mpz_t &K) {
     assert( batch.state == GPUBatch::State::EMPTY);
 
     // Grap some entries from each item in M
@@ -829,6 +833,7 @@ void run_testing_thread(const struct Config og_config) {
         pthread_setname_np(pthread_self(), "CREATE_BATCHES");
         cout << endl;
 
+
         // K is initialized in prob_prime_and_stats
         mpz_t K;
         double K_log = prob_prime_and_stats(og_config, K);
@@ -861,8 +866,7 @@ void run_testing_thread(const struct Config og_config) {
             //printf("\tStarting to create GPU Batches\n");
         }
 
-        // Used for various stats
-        StatsCounters stats(high_resolution_clock::now());
+        StatsCounters gpu_stats(high_resolution_clock::now());
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
@@ -927,7 +931,7 @@ void run_testing_thread(const struct Config og_config) {
                     }
 
                     batch.fill_start = high_resolution_clock::now();
-                    fill_batch(i, batch, K, stats);
+                    fill_batch(i, batch, K);
                     batch.fill_end = high_resolution_clock::now();
 
                     if (batch.i == 0) {
@@ -972,6 +976,7 @@ void run_testing_thread(const struct Config og_config) {
                     running_batches -= 1;
                     uint32_t primes_in_batch = process_finished_batch(batch);
                     SieveData *d = sieve_data.get();
+                    gpu_stats.s_total_prp_tests += batch.i
 
                     //printf("\tGot Finished Batch(%d)=%u prime | %lu running, %lu/%lu\n",
                     //        i, primes_in_batch,
@@ -981,7 +986,7 @@ void run_testing_thread(const struct Config og_config) {
                     if (running_batches == 0 && d->test_i && d->test_i == d->unknown_m_i.size()) {
                         if (sieve_data->unknown_m_i.size() < count_valid_m * .004) {
                             // Less than 1% of original left
-                            push_to_overflow_and_increment_M_range();
+                            push_to_overflow_and_increment_M_range(gpu_stats);
                         } else {
                             increment_X();
                         }
