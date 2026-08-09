@@ -36,3 +36,4 @@ $ cd prime-gap-gpu
 ## TODO
 
  * [ ] `save_partial_at_exit` save offset (and what merit this represents) + currently active M.
+ * [ ] Might have missed '927598685 * 337# / 210 - 4538'?

@@ -121,7 +121,7 @@ void K_stats(
         int base10 = mpz_sizeinbase(K, 10);
         *K_digits = base10;
 
-        if (config.verbose >= 2) {
+        if (config.verbose >= 1) {
         int K_bits   = mpz_sizeinbase(K, 2);
         printf("K = %d bits, %d digits, log(K) = %.2f\n",
                 K_bits, base10, *K_log);
@@ -299,7 +299,7 @@ double prob_prime_and_stats(const struct Config& config, mpz_t &K) {
     double K_log;
     K_stats(config, K, &K_digits, &K_log);
 
-    if (config.verbose >= 2) {
+    if (config.verbose >= 1) {
         // From Mertens' 3rd theorem
         double unknowns_after_sieve = 1 / (log(config.max_prime) * exp(GAMMA));
         const double N_log = K_log + log(config.m_start + config.m_inc / 2);
@@ -394,6 +394,8 @@ if (program == Pr::SEARCH_GPU) {
     cout << "[OPTIONAL]" << endl;
     cout << "  -q, --quiet" << endl;
     cout << "    suppress some status output (twice for more suppression)" << endl;
+    cout << "  -v, --verbose" << endl;
+    cout << "    increase amount of output (twice for more verbosity)" << endl;
     cout << "  -h, --help" << endl;
     cout << "    print this help message" << endl;
 }
@@ -420,6 +422,7 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         {"testing",          no_argument,       0,  12  },
 
         {"quiet",            no_argument,       0,  'q' },
+        {"verbose",          no_argument,       0,  'v' },
         {"help",             no_argument,       0,  'h' },
         {0,                  0,                 0,   0  }
     };
@@ -429,7 +432,7 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
     int option_index = 0;
     char c;
-    while ((c = getopt_long(argc, argv, "qhp:d:u:t:", long_options, &option_index)) >= 0) {
+    while ((c = getopt_long(argc, argv, "qvhp:d:u:t:", long_options, &option_index)) >= 0) {
         switch (c) {
             case 'h':
                 show_usage(argv[0], program);
@@ -437,6 +440,10 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
             case 'q':
                 config.verbose--;
+                break;
+
+            case 'v':
+                config.verbose++;
                 break;
 
             case 'p':

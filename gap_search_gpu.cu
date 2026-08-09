@@ -183,6 +183,10 @@ class SieveData {
         /* m_i where (m * K + current_testing_x) is prime at current_testing_x */
         vector<uint32_t> newly_prime_m_i;
 
+        /* BITSET of m_i where a prime has been found (at any X). */
+        /* used in conjunction with newly_prime_m_i to prevent double testing */
+        vector<uint8_t> found_prime_m_i;
+
         /**
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
@@ -345,9 +349,11 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
 
             // Run batch on GPU and wait for results to be set
             if (1) {
-                //printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
+                if (verbose >= 4)
+                    printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
                 runner.run_test(batch.i, batch.z, batch.result);
-                //printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
+                if (verbose >= 4)
+                    printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
             } else {
                 // Return true for 1/10 results (helps not overflow sieve)
                 for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
@@ -409,7 +415,8 @@ void run_sieve_thread(void) {
             const auto state = sieve_data->state;
             if (state == SieveData::State::FIRST_SIEVE) {
                 if (config.m_start != sieve_data->config.m_start) {
-                    printf("Reset GPU Sieve to 0\n");
+                    if (config.verbose >= 3)
+                        printf("Reset GPU Sieve to 0\n");
                     last_sieved = 0;
                     sieve_data->next_tests_m_i.clear();
                 }
@@ -421,7 +428,6 @@ void run_sieve_thread(void) {
                 usleep(1'000); // 1ms
                 continue;
             }
-            //printf("\tGPU SIEVE %lu vs %lu\n", current_x, last_sieved);
             if (current_x == last_sieved) {
                 lock.unlock();
                 usleep(2'000); // 2ms waiting for tests to consume next_tests_m_i
@@ -460,7 +466,7 @@ void run_sieve_thread(void) {
             assert(!unknowns_i.empty());
 
             auto s_stop_t = high_resolution_clock::now();
-            if (current_x <= 2) {
+            if ((config.verbose + (current_x <= 2)) >= 2) {
                 printf("\tGPU Sieve (%ldM to %ldM) @X=%lu with %ld/%ld unknown/active took %.1f seconds \n",
                        config.m_start / 1'000'000, M_end / 1'000'000,
                        current_x, unknowns_i.size(), local_active_m_i.size(),
@@ -493,11 +499,13 @@ void run_overflow_thread(const mpz_t &K_in) {
         mpz_init(tmp1);
         mpz_init(tmp2);
 
-        double K_log = calc_log_K(sieve_data->config);
-        const float min_merit = sieve_data->config.min_merit;
+        struct Config config = sieve_data->config;
+
+        double K_log = calc_log_K(config);
+        const float min_merit = config.min_merit;
         // See THEORY.md! Added const is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
-        const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(sieve_data->config.m_inc));
+        const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(config.m_inc));
 
         // TODO I think this is global later
         /*
@@ -542,9 +550,10 @@ void run_overflow_thread(const mpz_t &K_in) {
                     uint64_t prev_gap = mpz_get_ui(tmp2);
                     uint64_t gap = prev_gap + next_gap;
                     double merit = gap / (K_log + log(m));
-                    if (merit > min_merit)
-                        printf("GAP (%lu * K) = -%lu to %lu = %lu = %.2f merit\n",
-                                m, prev_gap, next_gap, gap, merit);
+                    if (merit > min_merit) {
+                        printf("%lu %.3f %lu * %u# / %u - %lu\n",
+                                gap, merit, m, config.p, config.d, prev_gap);
+                    }
                 }
                 // TODO also pass in final X and verify tmp2 > X
 
@@ -623,7 +632,10 @@ void setup_sieve_data() {
     sieve_data->unknown_m_i.clear();
     sieve_data->test_i = 0;
     sieve_data->newly_prime_m_i.clear();
+    sieve_data->found_prime_m_i.clear();
     sieve_data->next_tests_m_i.clear();
+
+    sieve_data->found_prime_m_i.resize((sieve_data->config.m_inc + 7) / 8 + 1, 0);
 
     const auto &config = sieve_data->config;
     for (uint64_t m_i = 0; m_i < config.m_inc; m_i++) {
@@ -633,48 +645,22 @@ void setup_sieve_data() {
             sieve_data->active_m_i.push_back(m_i);
         }
     }
-    printf("\nSetup, starting at X=%lu with %ld/%ld active_m\n",
-            sieve_data->current_sieve_x,
-            sieve_data->active_m_i.size(), config.m_inc);
+    if (config.verbose + (config.m_start <= 1) >= 2)
+        printf("\nSetup, starting at X=%lu with %ld/%ld active_m\n",
+                sieve_data->current_sieve_x,
+                sieve_data->active_m_i.size(), config.m_inc);
 
     sieve_data->state = SieveData::State::FIRST_SIEVE;
 }
 
-/**
- * Removes all elements of B from A.
- * all elements in A MUST appear in B.
- */
-void remove_vector(vector<uint32_t> &A, vector<uint32_t> &B) {
-    // This sentinel avoid having to check length of B;
-    size_t b_i = 0;
-    B.push_back(0xFFFFFFFF);
-
-    uint32_t b = B[b_i];
+/** Remove any element of A where bit A is set in B. */
+void remove_vector(vector<uint32_t> &A, const vector<uint8_t> &B) {
     size_t i = 0;
     for (uint32_t a : A) {
-        if (a >= b) {
-            bool skip = (a == b);
-            /*
-             * if (a != b) {
-                printf("ERROR: %u(%lu) vs %u(%lu)\n", a, i, b, b_i);
-            }
-            assert(a == b);
-            */
-            b = B[++b_i];
-            if (skip)
-                continue;
-        }
+        if (B[a >> 3] & (1 << (a & 7)))
+            continue;
         A[i++] = a;
     }
-    B.pop_back(); // remove sentinel
-    /*
-    if (b_i) {
-        printf("\t\tRemoved %lu/%lu primes\n", b_i, B.size());
-    }
-    printf("\t%lu - %lu primes = %lu\n", A.size(), b_i, i);
-    */
-    //assert( b_i == B.size());
-    //assert( i + b_i == A.size() );
     A.resize(i);
 }
 
@@ -684,21 +670,19 @@ void increment_X() {
     // TODO verify test_i > active_m_i
     // TODO verify no outstanding prime tests
     // TODO verify next_tests_m_i has been set
-    // TODO do I need to hold the lock or does my parent?
 
     // asserting next sieve is already done.
     assert(sieve_data->current_sieve_x > sieve_data->current_testing_x);
     uint64_t jump = sieve_data->current_sieve_x - sieve_data->current_testing_x;
     sieve_data->current_testing_x = sieve_data->current_sieve_x;
-    //if (sieve_data->current_testing_x % 300 <= 1) {
-    //    printf("\nMoving to X=%ld\n", sieve_data->current_testing_x);
-    //}
+    if (sieve_data->config.verbose >= 3 && sieve_data->current_testing_x % 300 <= 1) {
+        printf("\nMoving to X=%ld\n", sieve_data->current_testing_x);
+    }
 
-    // TODO: PART OF DEBUGGING
-    // Required for merge remove.
-    sort(sieve_data->newly_prime_m_i.begin(), sieve_data->newly_prime_m_i.end());
-    remove_vector(sieve_data->active_m_i, sieve_data->newly_prime_m_i);
-
+    for (auto m_i : sieve_data->newly_prime_m_i) {
+        sieve_data->found_prime_m_i[m_i >> 3] |= 1 << (m_i & 7);
+    }
+    remove_vector(sieve_data->active_m_i, sieve_data->found_prime_m_i);
     sieve_data->unknown_m_i.clear();
     sieve_data->test_i = 0;
 
@@ -706,12 +690,9 @@ void increment_X() {
     assert (sieve_data->current_sieve_x == sieve_data->current_testing_x );
     if (!sieve_data->next_tests_m_i.empty()) {
         sieve_data->unknown_m_i = sieve_data->next_tests_m_i;
-        remove_vector(sieve_data->unknown_m_i, sieve_data->newly_prime_m_i);
+        remove_vector(sieve_data->unknown_m_i, sieve_data->found_prime_m_i);
         sieve_data->next_tests_m_i.clear();
         sieve_data->current_sieve_x = find_next_coprime_x(sieve_data->current_sieve_x);
-    } else {
-        //printf("\tWARNING: increment_X with late sieve!\n");
-        // TODO: How to prevents from previous primes in sieve_data->unknown_m_i?
     }
 
     sieve_data->newly_prime_m_i.clear();
@@ -776,13 +757,20 @@ void fill_batch(
 
         uint32_t gpu_i = batch.i;  // [GPU] batch index
         j = sieve_data->test_i;
-        for (; j < sieve_data->unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++, gpu_i++) {
+        for (; j < sieve_data->unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++) {
+            // Skip any element where a previous prime was found.
+            // Happens when primes from last X weren't removed from active_m before sieve started.
+            uint32_t m_i = sieve_data->unknown_m_i[j];
+            if (sieve_data->found_prime_m_i[m_i >> 3] & (1 << (m_i & 7)))
+                continue;
+
             uint64_t m = m_start + sieve_data->unknown_m_i[j];
             mpz_mul_ui(t, K, m);
             mpz_add_ui(*batch.z[gpu_i], t, X);
             //gmp_printf("%lu * K + %lu = %Zd\n", m, X, batch.z[gpu_i]);
             batch.active[gpu_i] = true;
             batch.m_i[gpu_i] = sieve_data->unknown_m_i[j];
+            gpu_i++;
         }
 
         sieve_data->test_i = j;

@@ -54,11 +54,11 @@ struct Config {
     /**
      * -1: results only
      *  0: results & final stats
-     *  1: stats
-     *  2: stats, probs, debug
-     *  3: ???
+     *  1: stats, probs,
+     *  2: debug
+     *  3: traces
      */
-    int verbose = 2;
+    int verbose = 1;
 
     // Show timing information (turn off --hide-timing for easier diff'ing)
     bool show_timing = true;
