@@ -20,7 +20,7 @@ import numpy as np
 P = 907
 
 SL = 2 * 10 ** 7
-for d in [2, 3, 5, 6, 30]:
+for d in [6, 30, 210, 30030, 510510]:
     K = gmpy2.primorial(P) // d
     # Ignore 1 which 'messes' up percent factor graph
     test = [i for i in range(2, SL+1) if gmpy2.gcd(i, K) == 1]
