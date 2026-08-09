@@ -79,12 +79,11 @@ class GpuStatsCounters {
 
         uint64_t wait_not_active = 0;
         uint64_t wait_no_next_tests = 0;
-        uint64_t wait_no_open_gpu = 0;
 
-        double d_ms_fill = 0.0;
-        double d_ms_queued_full = 0.0;
-        double d_ms_run = 0.0;
-        double d_ms_queued_done = 0.0;
-        double d_ms_total = 0.0;
+        double d_fill = 0.0;
+        double d_queued_full = 0.0;
+        double d_run = 0.0;
+        double d_queued_done = 0.0;
+        double d_results = 0.0;
 };
 

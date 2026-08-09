@@ -408,11 +408,12 @@ void run_sieve_thread(void) {
             p_and_r.emplace_back((uint32_t) prime, base_r);
         }
 
-
         assert(sieve_data);
         vector<uint32_t> local_active_m_i;
         struct Config config;
         uint64_t last_sieved = 0;
+        uint64_t total_runs = 0;
+        double total_time = 0;
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
@@ -471,13 +472,17 @@ void run_sieve_thread(void) {
             assert(!unknowns_i.empty());
 
             auto s_stop_t = high_resolution_clock::now();
+            double duration_t = duration<double>(s_stop_t - s_start_t).count();
+            total_runs += 1;
+            total_time += duration_t;
+
             if ((config.verbose
                         + (current_x <= 2)
                         + (config.m_start <= 1'000'000)) >= 3) {
                 printf("\tGPU Sieve (%ldM to %ldM) @X=%lu with %ld/%ld unknown/active took %.1f seconds \n",
                        config.m_start / 1'000'000, M_end / 1'000'000,
                        current_x, unknowns_i.size(), local_active_m_i.size(),
-                       duration<double>(s_stop_t - s_start_t).count());
+                       duration_t);
             }
 
             lock.lock();
@@ -491,6 +496,12 @@ void run_sieve_thread(void) {
             }
             lock.unlock();
         }
+
+        if (config.verbose >= 1) {
+            printf("\tsieves: %lu, total_time: %.1f seconds (%.2f/sieve)\n",
+                    total_runs, total_time, total_time / total_runs);
+        }
+
     } catch (const std::exception &e) {
         cout << "ERROR in run_sieve_thread" << endl;
         cout << e.what() << endl;
@@ -547,7 +558,7 @@ void run_overflow_thread(const mpz_t &K_in) {
 
                 if (stop_queue > 0 && tested % 1'000 == 0) {
                     printf("\tFinalizing(stage %d): %lu open, %lu processed\n",
-                        stop_queue, overflowed.size(), tested);
+                        stop_queue.load(), overflowed.size(), tested);
                 }
 
                 auto m_and_x = overflowed.front(); overflowed.pop_front();
@@ -936,7 +947,7 @@ void run_testing_thread(const struct Config og_config) {
                     assert( sieve_data->current_testing_x == sieve_data->current_sieve_x );
                     if (sieve_data->next_tests_m_i.empty()) {
                         lock.unlock();
-                        usleep(1'000); // 1ms
+                        usleep(2'000); // 1ms
                         gpu_stats.wait_no_next_tests++;
                         continue;
                     }
@@ -979,8 +990,7 @@ void run_testing_thread(const struct Config og_config) {
             // Wait for the next batch to be done.
             {
                 if (open_gpu.empty()) {
-                    // Why would this happen, empty and nothing to queue?
-                    gpu_stats.wait_no_open_gpu++;
+                    printf("HOW DID THIS HAPPEN? No open_gpu?");
                     usleep(50'000); // 50ms
                 } else {
                     int i = open_gpu.front();
@@ -1029,21 +1039,21 @@ void run_testing_thread(const struct Config og_config) {
                     double ms_queued_full = duration<double>(batch.gpu_start - batch.fill_end).count();
                     double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
                     double ms_queued_done = duration<double>(batch.results_start - batch.gpu_end).count();
-                    double ms_total = duration<double>(batch.results_end - batch.results_start).count();
+                    double ms_results = duration<double>(batch.results_end - batch.results_start).count();
 
-                    gpu_stats.d_ms_fill += ms_fill;
-                    gpu_stats.d_ms_queued_full += ms_queued_full;
-                    gpu_stats.d_ms_run += ms_run;
-                    gpu_stats.d_ms_queued_done += ms_queued_done;
-                    gpu_stats.d_ms_total += ms_total;
+                    gpu_stats.d_fill += ms_fill;
+                    gpu_stats.d_queued_full += ms_queued_full;
+                    gpu_stats.d_run += ms_run;
+                    gpu_stats.d_queued_done += ms_queued_done;
+                    gpu_stats.d_results += ms_results;
 
                     //if (rand() % (1 * 1024) == 0) {
                     if (0) {
                         // TODO check if gpu times are the same.
                         // If so that means that they are running side by side which maybe isn't what we want.
                         printf("CPU: batch timing fill: %.4f, to gpu: %.4f, "
-                                "gpu: %.4f, to cpu: %.4f, process: %.4f\n",
-                                ms_fill, ms_queued_full, ms_run, ms_queued_done, ms_total);
+                                "gpu: %.4f, to cpu: %.4f, processing results: %.4f\n",
+                                ms_fill, ms_queued_full, ms_run, ms_queued_done, ms_results);
                     }
 
                     // Result batch to EMPTY
@@ -1057,7 +1067,23 @@ void run_testing_thread(const struct Config og_config) {
             mpz_clear(K);
         }
 
-        // TODO print final stats
+        if (sieve_data->config.verbose >= 1) {
+            double total = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
+            printf("\nGPU Timings\n");
+            printf("\twaits on no active_m(10ms) : %ld\n", gpu_stats.wait_not_active);
+            printf("\twaits on no next_tests(2ms): %ld\n", gpu_stats.wait_no_next_tests);
+            printf("\tfilling batches: %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total);
+            printf("\twaiting filled : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_queued_full, 100 * gpu_stats.d_queued_full / total);
+            printf("\trunning on gpu : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_run, 100 * gpu_stats.d_run / total);
+            printf("\twaiting done   : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_queued_done, 100 * gpu_stats.d_queued_done / total);
+            printf("\tresults        : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_results, 100 * gpu_stats.d_results / total);
+            printf("\n");
+        }
 
         // Send notifies (to wake up GPU thread and stop conditional waiting)
         printf("End of testing thread, Joining batch threads\n");
@@ -1123,7 +1149,6 @@ void prime_gap_test(struct Config config) {
         assert( (N_bits + 1) < BITS ); // See last debug line.
         assert( BITS <= (1 << (2 * WINDOW_BITS)) );
     }
-
 
     is_running = true;
     stop_queue = 0;
