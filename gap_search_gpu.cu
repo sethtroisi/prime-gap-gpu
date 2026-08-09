@@ -191,7 +191,6 @@ class SieveData {
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
          */
-        // TODO this probably needs a mutex/lock/state
         size_t current_sieve_x = 0;
         vector<uint32_t> next_tests_m_i;
 
@@ -274,7 +273,7 @@ std::mutex overflow_mtx;
 std::condition_variable overflow_cv;
 // deque (double ended queue) avoids a degenerate case of large gap getting stuck
 // if this can't keep up. Try to avoid falling behind, but this is an extra safety.
-deque<uint64_t> overflowed;
+deque<std::pair<uint64_t, uint32_t>> overflowed;
 
     /**
      * globals:
@@ -494,10 +493,11 @@ void run_sieve_thread(void) {
 void run_overflow_thread(const mpz_t &K_in) {
     try {
         pthread_setname_np(pthread_self(), "CPU_OVERFLOW");
-        mpz_t K, tmp1, tmp2;
+        mpz_t K, center, next_p, prev_p;
         mpz_init_set(K, K_in);
-        mpz_init(tmp1);
-        mpz_init(tmp2);
+        mpz_init(center);
+        mpz_init(next_p);
+        mpz_init(prev_p);
 
         struct Config config = sieve_data->config;
 
@@ -536,21 +536,34 @@ void run_overflow_thread(const mpz_t &K_in) {
                             overflowed.size(), tested);
                 }
 
-                auto m = overflowed.front(); overflowed.pop_front();
+                auto m_and_x = overflowed.front(); overflowed.pop_front();
+                auto m = m_and_x.first;
+                auto min_x = m_and_x.second;
 
-                mpz_mul_ui(tmp1, K, m);
-                mpz_nextprime(tmp2, tmp1);
-                mpz_sub(tmp2, tmp2, tmp1);
-                uint64_t next_gap = mpz_get_ui(tmp2);
+                mpz_mul_ui(center, K, m);
+                mpz_add_ui(next_p, center, min_x);
+                mpz_nextprime(next_p, next_p);
+                mpz_sub(next_p, next_p, center);
+                uint64_t next_gap = mpz_get_ui(next_p);
 
                 if (next_gap > MIN_GAP_TO_CONTINUE) {
-                    mpz_mul_ui(tmp1, K, m);
-                    mpz_prevprime(tmp2, tmp1);
-                    mpz_sub(tmp2, tmp1, tmp2);
-                    uint64_t prev_gap = mpz_get_ui(tmp2);
+                    mpz_prevprime(prev_p, center);
+                    mpz_sub(prev_p, center, prev_p);
+                    uint64_t prev_gap = mpz_get_ui(prev_p);
                     uint64_t gap = prev_gap + next_gap;
                     double merit = gap / (K_log + log(m));
                     if (merit > min_merit) {
+                        // Double check, we only performed a single round of rabin miller on many numbers.
+                        mpz_sub_ui(prev_p, center, prev_gap)
+                        mpz_nextprime(next_p, prev_p);
+                        mpz_sub(next_p, next_p, prev_p);
+                        uint64_t test_gap = mpz_get_ui(next_p);
+                        if (test_gap != gap) {
+                            printf("ERROR! %lu vs %lu at %lu * %u# / %u - %lu "
+                                    "(could always be from 1 round of miller-rabin)\n",
+                                    test_gap, gap, m, config.p, config.d, prev_gap)
+                        }
+
                         printf("%lu %.3f %lu * %u# / %u - %lu\n",
                                 gap, merit, m, config.p, config.d, prev_gap);
                     }
@@ -563,6 +576,9 @@ void run_overflow_thread(const mpz_t &K_in) {
 
         cout << "\tOverflowed " << tested << " intervals" << endl;
         mpz_clear(K);
+        mpz_clear(center);
+        mpz_clear(next_p);
+        mpz_clear(prev_p);
     } catch (const std::exception &e) {
         cout << "ERROR in run_overflow_thread" << endl;
         cout << e.what() << endl;
@@ -699,22 +715,29 @@ void increment_X() {
 }
 
 
-/**
- * sieve_mtx must be held while calling
- */
+/** sieve_mtx must be held while calling */
 void push_to_overflow_and_increment_M_range() {
-    uint64_t m_start = sieve_data->config.m_start;
-    uint64_t m_inc = sieve_data->config.m_inc;
-    printf("\n\n\nMoving to M_start from %ld to %ld\n",
-            m_start, m_start + m_inc);
-    printf("\tQueueing %ld for overflow (X>%ld)\n",
-            sieve_data->active_m_i.size(),
-            sieve_data->current_testing_x);
+    // TODO refactor this out of increment_X
+    for (auto m_i : sieve_data->newly_prime_m_i) {
+        sieve_data->found_prime_m_i[m_i >> 3] |= 1 << (m_i & 7);
+    }
+    remove_vector(sieve_data->active_m_i, sieve_data->found_prime_m_i);
 
-    // TODO do I need to hold the lock or does my parent?
+    const auto& config = sieve_data->config;
+    uint64_t m_start = config.m_start;
+    uint64_t m_inc = config.m_inc;
+    uint32_t min_X = sieve_data->current_testing_x + 1;
+    if (config.verbose >= 2) {
+        printf("\n\n\nMoving to M_start from %ld to %ld\n",
+                m_start, m_start + m_inc);
+        printf("\tQueueing %ld for overflow (X>%ld)\n",
+                sieve_data->active_m_i.size(),
+                sieve_data->current_testing_x);
+    }
+
     std::lock_guard lock(overflow_mtx);
     for (uint32_t m_i : sieve_data->active_m_i) {
-        overflowed.push_back(m_start + m_i);
+        overflowed.push_back({m_start + m_i, min_X});
     }
 
     sieve_data->config.m_start += m_inc;
@@ -796,7 +819,7 @@ void fill_batch(
 
 void run_testing_thread(const struct Config og_config) {
     // gap / 2 up to 60 merit
-    // TODO add back
+    // TODO add back distance_counts
     //uint64_t distance_counts[10000] = {};
 
     try {
@@ -884,7 +907,6 @@ void run_testing_thread(const struct Config og_config) {
                         usleep(1'000); // 1ms
                         continue;
                     }
-                    //printf("\t\tCopying over unknown_m_i(%lu) in testing thread\n", sieve_data->unknown_m_i.size());
                     // TODO refactor to a method shared with setup.
                     sieve_data->unknown_m_i = sieve_data->next_tests_m_i;
                     sieve_data->next_tests_m_i.clear();
