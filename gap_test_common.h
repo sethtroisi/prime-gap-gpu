@@ -54,7 +54,7 @@ class StatsCounters {
         uint64_t    s_total_prev_p = 0;
         uint64_t    s_total_next_p = 0;
 
-        // This can change in const possible_print_stats
+        // This can change in const possibly_print_stats
         mutable float     s_tests_per_second = 0;
 
         /** Return if stats were printed */
@@ -65,6 +65,26 @@ class StatsCounters {
             int p_tests, int n_tests,
             float merit);
 
-        bool possible_print_stats(
+        bool possibly_print_stats(
             const Config &config) const;
 };
+
+
+class GpuStatsCounters {
+    public:
+        GpuStatsCounters() {};
+
+        uint64_t batches_run = 0;
+        uint64_t batches_partial = 0;
+
+        uint64_t wait_not_active = 0;
+        uint64_t wait_no_next_tests = 0;
+        uint64_t wait_no_open_gpu = 0;
+
+        double d_ms_fill = 0.0;
+        double d_ms_queued_full = 0.0;
+        double d_ms_run = 0.0;
+        double d_ms_queued_done = 0.0;
+        double d_ms_total = 0.0;
+};
+
