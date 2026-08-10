@@ -102,7 +102,7 @@ const size_t GPU_BATCH_SIZE = 4 * 1024;
 // Always use 1.
 const int ROUNDS = 1;
 
-const size_t CPU_SIEVE_LIMIT = 8'000'000;
+const size_t CPU_SIEVE_LIMIT = 12'000'000;
 
 //const size_t COMBINED_SIEVE_THREADS = 8;
 
@@ -143,7 +143,8 @@ int main(int argc, char* argv[]) {
 
     prime_gap_test(config);
 
-    cout << argv[0] << " ended" << endl;
+    if (config.verbose >= 2)
+        cout << argv[0] << " ended" << endl;
 }
 
 
@@ -375,7 +376,8 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             batch.cv.notify_one();
         }
 
-        if (verbose >= 1) {
+        if (verbose >= 2) {
+            usleep(runner_num * 10'000); // i * 10ms
             printf("GPU(%d): Processed %'ld batches\n", runner_num, processed_batches);
         }
     } catch (const std::exception &e) {
@@ -422,6 +424,8 @@ void run_sieve_thread(void) {
 
         std::unique_lock<std::mutex> lock(sieve_mtx, std::defer_lock);
 
+        auto s_thread_start_t = high_resolution_clock::now();
+
         // Some prework
         mpz_t K;
         init_K(sieve_data->config, K);
@@ -441,13 +445,15 @@ void run_sieve_thread(void) {
                 p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
             }
         }
+        assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
 
         assert(sieve_data);
         struct Config config = sieve_data->config;
         const auto m_inc = config.m_inc;
 
         vector<uint32_t> local_active_m_i;
-        vector<uint8_t> composites((m_inc + 7) / 8 + 1, 0);
+        // Need to be able to write to composites[m_inc] as sentinel
+        vector<uint8_t> composites((m_inc + 8) / 8 + 1, 0);
         uint64_t last_sieved = 0;
         uint64_t total_m = m_inc;
         uint64_t total_runs = 0;
@@ -457,7 +463,7 @@ void run_sieve_thread(void) {
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
-            uint32_t current_x = sieve_data->current_sieve_x;
+            uint32_t X = sieve_data->current_sieve_x;
             const auto state = sieve_data->state;
             if (state == SieveData::State::FIRST_SIEVE) {
                 total_m += m_inc;
@@ -470,12 +476,12 @@ void run_sieve_thread(void) {
             }
 
             if ((state != SieveData::State::FIRST_SIEVE && state != SieveData::State::ACTIVE)
-                    || current_x == 0) {
+                    || X == 0) {
                 lock.unlock();
                 usleep(1'000); // 1ms
                 continue;
             }
-            if (current_x == last_sieved) {
+            if (X == last_sieved) {
                 lock.unlock();
                 usleep(2'000); // 2ms waiting for tests to consume next_tests_m_i
                 continue;
@@ -489,31 +495,41 @@ void run_sieve_thread(void) {
             config = sieve_data->config;
             lock.unlock();
 
-
             // TODO: sieve these numbers on GPU
             const auto m_start = config.m_start;
+            const uint32_t M_parity_check = m_start & 1;
             {
                 assert (config.d % 2 == 0);
                 uint64_t m_0 = m_start + local_active_m_i.front();
                 assert (m_0 % 2 == 1);
-                // verify K (odd) + current_x is not divisibly by 2
-                assert ( current_x % 2 == 0 );
+                // verify K (odd) + X is not divisibly by 2
+                assert ( X % 2 == 0 );
 
                 for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
-                    // if ((m * K + current_x) % p == 0) {
-                    // if ((m * K) % p == -current_x) {
-                    // if ((m * K * inv_K) % p == -current_x * inv_K) {
-                    //uint64_t m_0 = (-current_x * inv_K) % prime;
+                    // if ((m * K + X) % p == 0) {
+                    // if ((m * K) % p == -X) {
+                    // if ((m * K * inv_K) % p == -X * inv_K) {
+                    //uint64_t m_0 = (-X * inv_K) % prime;
 
                     uint64_t m_start_shift = m_start % prime;
                     m_start_shift = prime - m_start_shift + prime * (m_start_shift == prime);
-                    uint64_t mi_0 = (current_x * neg_inv_K + m_start_shift) % prime;
+                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
-                    // TODO go to first odd and increment by 2*prime
+                    if (prime < m_inc) {
+                        if (((X ^ mi_0) & 1) == M_parity_check)
+                            mi_0 += prime;
 
-                    for (uint64_t t = mi_0; t < m_inc; t += prime) {
-                        composites[t >> 3] |= 1 << (t & 7);
+                        uint32_t shift = 2*prime;
+                        for (uint64_t t = mi_0; t < m_inc; t += shift) {
+                            composites[t >> 3] |= 1 << (t & 7);
+                        }
+
+                    } else {
+                        //  make this branchless, safe to write to composites[m_inc]
+                        uint64_t index = mi_0 < m_inc ? mi_0 : m_inc;
+                        composites[index >> 3] |= 1 << (index & 7);
                     }
+
                 }
             }
 
@@ -537,19 +553,19 @@ void run_sieve_thread(void) {
             total_time += duration_t;
 
             if ((config.verbose
-                        + (current_x <= 2)
+                        + (X <= 2)
                         + (config.m_start <= 1'000'000)) >= 3) {
                 auto M_end = m_start + m_inc;
                 printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %ld/%ld unknown/active took %.2f seconds \n",
                        m_start / 1'000'000, M_end / 1'000'000,
-                       current_x, unknowns_i.size(), local_active_m_i.size(),
+                       X, unknowns_i.size(), local_active_m_i.size(),
                        duration_t);
             }
 
             lock.lock();
 
             // Finalize range
-            last_sieved = current_x;
+            last_sieved = X;
             sieve_data->next_tests_m_i = unknowns_i;
             if (state == SieveData::State::FIRST_SIEVE) {
                 // Mark as active after next_tests_m_i are set
@@ -559,15 +575,17 @@ void run_sieve_thread(void) {
         }
 
         if (config.verbose >= 1) {
+            double total_s = duration<double>(high_resolution_clock::now() - s_thread_start_t).count();
             printf("SIEVE Timings:\n");
-            // TODO add m / sec
-            printf("\ttotal_m: %lu\n", total_m);
+            printf("\ttotal_m: %lu (%u/second) %.1f seconds\n",
+                    total_m, (uint32_t) (total_m / total_s), total_s);
             printf("\tsieves: %lu, total_time: %.1f seconds (%.3f/sieve)\n",
                     total_runs, total_time, total_time / total_runs);
             printf("\ttotal_active: %lu, total_unknown: %lu (%.1f%%)\n",
                     total_active, total_unknown, 100.0 * total_unknown / total_active);
             printf("\tactive / run: %lu, unknown / run: %lu\n",
                     total_active / total_runs, total_unknown / total_runs);
+            printf("\n");
         }
 
     } catch (const std::exception &e) {
@@ -603,18 +621,6 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
 
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = config.m_inc * config.cpu_fraction;
-
-        // TODO I think this is global later
-        /*
-        std::vector<std::pair<uint32_t, uint32_t>> p_and_r;
-        primesieve::iterator iter;
-        uint64_t prime = iter.next_prime();
-        assert (prime == 2);  // we skip 2 which is the oddest prime.
-        for (prime = iter.next_prime(); prime < CPU_SIEVE_LIMIT; prime = iter.next_prime()) {
-            const uint32_t base_r = mpz_fdiv_ui(K, prime);
-            p_and_r.emplace_back((uint32_t) prime, base_r);
-        }
-        */
 
         uint64_t tested = 0;
         std::unique_lock<std::mutex> lock(overflow_mtx, std::defer_lock);
@@ -689,8 +695,8 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
             }
         }
 
-        usleep(i * 10'000); // i * 10ms
         if ((config.verbose + (i == 0)) >= 2) {
+            usleep(i * 10'000); // i * 10ms
             printf("\tCPU overflow(%u) tested %lu/%lu\n",
                     i, tested, overflow_tested.load());
         }
@@ -933,16 +939,16 @@ void fill_batch(
 
     assert( batch.i <= GPU_BATCH_SIZE);
 
-    if (sieve_data->config.verbose >= 1 && first_test_i < sieve_data->test_i) {
-        //printf("\t\tFilled Batch(%u) | X=%lu -> [%u, %lu) of %lu\n",
-        //    batch_i, X,
-        //    first_test_i, sieve_data->test_i, sieve_data->unknown_m_i.size());
+    if (sieve_data->config.verbose >= 3 && first_test_i < sieve_data->test_i) {
+        printf("\t\tFilled Batch(%u) | X=%lu -> [%u, %lu) of %lu\n",
+            batch_i, X,
+            first_test_i, sieve_data->test_i, sieve_data->unknown_m_i.size());
     }
 
     // Batches should be full unless lots of overflowed results.
-    if (batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
-        //printf("Partial load @ %lu -> %lu this batch: %lu/%lu\n",
-        //    X, j, batch.i, GPU_BATCH_SIZE);
+    if (sieve_data->config.verbose >= 3 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
+        printf("Partial load @ %lu -> %lu this batch: %lu/%lu\n",
+            X, j, batch.i, GPU_BATCH_SIZE);
     }
 }
 
@@ -1131,6 +1137,8 @@ void run_testing_thread(const struct Config og_config) {
                     double ms_queued_done = duration<double>(batch.results_start - batch.gpu_end).count();
                     double ms_results = duration<double>(batch.results_end - batch.results_start).count();
 
+                    gpu_stats.batches_run += 1;
+                    gpu_stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
                     gpu_stats.d_fill += ms_fill;
                     gpu_stats.d_queued_full += ms_queued_full;
                     gpu_stats.d_run += ms_run;
@@ -1172,6 +1180,10 @@ void run_testing_thread(const struct Config og_config) {
                     gpu_stats.d_queued_done, 100 * gpu_stats.d_queued_done / total);
             printf("\tresults        : %.1f seconds (%.1f%%)\n",
                     gpu_stats.d_results, 100 * gpu_stats.d_results / total);
+            printf("\tBatch fill %%   : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
+                    100.0 * stats.s_total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
+                    100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
+            );
             printf("\n");
         }
 
@@ -1227,7 +1239,7 @@ void prime_gap_test(struct Config config) {
     {
         init_K(config, K);
         // +4 is just is personal safety blanket buffer.
-        size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.m_start + 100ul * config.m_inc) + 4;
+        size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.m_start + 1000ul * config.m_inc) + 4;
 
         // P# roughly 349, 709, 1063, 1447
         for (size_t bits : {512, 1024, 1536, 2048, 3036, 4096}) {
