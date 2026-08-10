@@ -297,9 +297,29 @@ double prob_prime_and_stats(const struct Config& config, mpz_t &K) {
         const double prob_prime = 1 / N_log - 1 / (N_log * N_log);
         double prob_prime_after_sieve = prob_prime / unknowns_after_sieve;
 
+        double unknowns_minus_K = 1;
+        {
+            uint64_t temp = config.d;
+            for (long p = 2; p*p <= temp; p++) {
+                if (temp % p == 0) {
+                    unknowns_minus_K *= (p - 1.0) / p;
+                    temp /= p;
+                }
+            }
+            if (temp > 1)
+                unknowns_minus_K *= (temp - 1.0) / temp;
+        }
+        // I think this is 2x off because of how primorials line up the residues
+        // residuals aren't random like normal.
+        unknowns_minus_K *= log(config.p) / log(config.max_prime);
+
         printf("\n");
         printf("\t%.3f%% of %d digit numbers are prime\n",
                 100 * prob_prime, K_digits);
+        printf("\tAPPROX %.1f%% of numbers tested = %.1f%% of X tested (after sieve to %luM)\n",
+                100 * unknowns_after_sieve,
+                100 * unknowns_minus_K,
+                config.max_prime / 1000000);
         printf("\t%.3f%% of tests should be prime (%.1fx speedup)\n",
                 100 * prob_prime_after_sieve, 1 / unknowns_after_sieve);
         printf("\t~ %.1f PRP tests per m (per side)\n",
@@ -372,7 +392,6 @@ void Args::show_usage(char* name, Pr program) {
     cout << "  --min-merit <min_merit>" << endl;
     cout << "    only display prime gaps with merit >= min_merit" << endl;
 if (program == Pr::SEARCH_GPU) {
-    cout << "  --mskip <start at this m>" << endl;
     cout << "    allows for partial resume of a previous range" << endl;
 }
 if (program == Pr::SEARCH_GPU) {
@@ -402,7 +421,6 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
         {"mstart",           required_argument, 0,   1  },
         {"minc",             required_argument, 0,   2  },
-        {"mskip",            required_argument, 0,   3  },
 
         {"min-merit",        required_argument, 0,   4  },
 
@@ -453,9 +471,6 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
                 break;
             case 2:
                 config.m_inc = atoll(optarg);
-                break;
-            case 3:
-                config.m_skip = atoll(optarg);
                 break;
 
             case 4:

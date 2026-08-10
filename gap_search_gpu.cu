@@ -102,8 +102,6 @@ const size_t GPU_BATCH_SIZE = 4 * 1024;
 // Always use 1.
 const int ROUNDS = 1;
 
-const size_t CPU_SIEVE_LIMIT = 12'000'000;
-
 //const size_t COMBINED_SIEVE_THREADS = 8;
 
 //************************************************************************
@@ -132,11 +130,6 @@ int main(int argc, char* argv[]) {
     if (config.verbose >= 0) {
         printf("\n");
         printf("Testing m * %d#/%d\n", config.p, config.d);
-    }
-
-    if (config.m_skip != 0) {
-        cout << "Use m_start not mskip" << endl;
-        return 1;
     }
 
     setlocale(LC_NUMERIC, "C");
@@ -428,14 +421,16 @@ void run_sieve_thread(void) {
 
         // Some prework
         mpz_t K;
-        init_K(sieve_data->config, K);
+        struct Config config = sieve_data->config;
+        init_K(config, K);
         std::vector<std::tuple<uint32_t, uint32_t>> p_and_neg_inverse_k;
+        std::vector<std::tuple<uint32_t, uint32_t>> p_and_r;
         {
             primesieve::iterator iter;
             uint64_t prime = iter.next_prime();
             assert (prime == 2);  // we skip 2 which is the oddest prime.
-            for (prime = iter.next_prime(); prime < CPU_SIEVE_LIMIT; prime = iter.next_prime()) {
-                if (prime <= sieve_data->config.p && sieve_data->config.d % prime > 0)
+            for (prime = iter.next_prime(); prime < config.max_prime; prime = iter.next_prime()) {
+                if (prime <= config.p && config.d % prime > 0)
                     continue;
                 const uint32_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 < base_r && base_r < prime );
@@ -443,12 +438,16 @@ void run_sieve_thread(void) {
                 assert( 0 < inv_K && inv_K < prime );
                 assert( ((uint64_t) inv_K * base_r) % prime == 1 );
                 p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
+
+                if (prime < 1'000) {
+                    p_and_r.emplace_back((uint32_t) prime, base_r);
+                }
             }
         }
+
         assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
 
         assert(sieve_data);
-        struct Config config = sieve_data->config;
         const auto m_inc = config.m_inc;
 
         vector<uint32_t> local_active_m_i;
@@ -516,6 +515,7 @@ void run_sieve_thread(void) {
                     uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
                     if (prime < m_inc) {
+                        // This requires K odd (checked above).
                         if (((X ^ mi_0) & 1) == M_parity_check)
                             mi_0 += prime;
 
@@ -533,14 +533,22 @@ void run_sieve_thread(void) {
                 }
             }
 
-
-
             // "most" (90%+) should be composite, so this should be ~10%
             vector<uint32_t> unknowns_i;
             unknowns_i.reserve(local_active_m_i.size() / 10);
             for (auto m_i : local_active_m_i) {
                 if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
                     unknowns_i.push_back(m_i);
+
+                    if (0) {
+                        for( const auto& [prime, base_r] : p_and_r) {
+                            uint64_t m = m_start + m_i;
+                            if ((m * base_r + X) % prime == 0) {
+                                printf("Composite issue: %lu * K + %u mod %u == 0",
+                                       m, X, prime);
+                            }
+                        }
+                    }
                 }
             }
             assert(!unknowns_i.empty());
@@ -1227,10 +1235,9 @@ void signal_callback_handler(int) {
 void prime_gap_test(struct Config config) {
     // Setup test runner
     printf("\n");
-    printf("BITS=%d\tWINDOW_BITS=%d\n", BITS, WINDOW_BITS);
+    printf("BITS=%d\n", BITS);
     printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
     printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
-    printf("SIEVE_LIMIT=%'ld\n", CPU_SIEVE_LIMIT);
 
     assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 || GPU_BATCH_SIZE == 4096 ||
             GPU_BATCH_SIZE == 8192 || GPU_BATCH_SIZE ==16384 || GPU_BATCH_SIZE ==32768 );
@@ -1270,9 +1277,13 @@ void prime_gap_test(struct Config config) {
     {
         auto s_start_t = high_resolution_clock::now();
         setup_sieve_data();
-        auto s_stop_t = high_resolution_clock::now();
-        printf("\tSetup took %.1f seconds\n",
-               duration<double>(s_stop_t - s_start_t).count());
+        if (config.verbose >= 2) {
+            auto s_stop_t = high_resolution_clock::now();
+            printf("\tSetup took %.1f seconds\n",
+                   duration<double>(s_stop_t - s_start_t).count());
+        }
+        if (config.verbose >= 1)
+            printf("\n");
     }
     std::thread sieve_thread(run_sieve_thread);
 
