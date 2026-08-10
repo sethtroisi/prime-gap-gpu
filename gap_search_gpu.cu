@@ -445,6 +445,8 @@ void run_sieve_thread(void) {
             }
         }
 
+        GPUSieve gpu_sieve(config);
+
         assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
 
         assert(sieve_data);
@@ -490,19 +492,23 @@ void run_sieve_thread(void) {
 
             assert(sieve_data->next_tests_m_i.size() == 0);
             local_active_m_i = sieve_data->active_m_i;
-            std::fill(composites.begin(), composites.end(), 0);
+            //std::fill(composites.begin(), composites.end(), 0);
             config = sieve_data->config;
             lock.unlock();
 
-            // TODO: sieve these numbers on GPU
             const auto m_start = config.m_start;
             const uint32_t M_parity_check = m_start & 1;
-            {
+            if (0) {
                 assert (config.d % 2 == 0);
                 uint64_t m_0 = m_start + local_active_m_i.front();
                 assert (m_0 % 2 == 1);
                 // verify K (odd) + X is not divisibly by 2
                 assert ( X % 2 == 0 );
+
+                // TODO this maybe isn't needed?
+                for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
+                    composites[m_i >> 3] |= 1 << (m_i & 7);
+                }
 
                 for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
                     // if ((m * K + X) % p == 0) {
@@ -533,11 +539,36 @@ void run_sieve_thread(void) {
                 }
             }
 
+            uint8_t *test = gpu_sieve.run(m_start, m_inc, X);
+
+            if (0) {
+                uint32_t num_composite = 0;
+                for (uint8_t c : composites) {
+                    num_composite += __builtin_popcount(c);
+                }
+
+                uint32_t mismatches = 0;
+                for (uint32_t m_i = 0; m_i < m_inc; m_i++) {
+                    uint8_t cpu_bit = (composites[m_i >> 3] & (1 << (m_i & 7))) > 0;
+                    mismatches += test[m_i] != cpu_bit;
+                    if (m_i > 199800 && test[m_i] != cpu_bit) {
+                        printf("Mismatch at m=%u\n X=%u | CPU: %u, GPU: %u\n",
+                                m_i, X, cpu_bit, test[m_i]);
+                    }
+                }
+                printf("GPU/CPU sieve mismatches: %u | CPU composites: %u\n", mismatches, num_composite);
+                if (mismatches) {
+                    is_running = false;
+                    exit(0);
+                }
+            }
+
             // "most" (90%+) should be composite, so this should be ~10%
             vector<uint32_t> unknowns_i;
             unknowns_i.reserve(local_active_m_i.size() / 10);
             for (auto m_i : local_active_m_i) {
-                if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
+                //if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
+                if (!(test[m_i >> 3] & 1 << (m_i & 7))) {
                     unknowns_i.push_back(m_i);
 
                     if (0) {

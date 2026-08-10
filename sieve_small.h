@@ -37,12 +37,7 @@ class GPUSieve {
         GPUSieve(const struct Config& config);
         ~GPUSieve();
 
-        uint64_t M_start;
-        // mi for m being considered, set to 0xFFFFFFFF to delete in next pass.
-        vector<uint32_t> m_inc;
-
-        void update();
-        void run(const struct Config& config);
+        uint8_t* run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X);
 
     private:
         cudaStream_t runner;
@@ -57,7 +52,7 @@ class GPUSieve {
 
         // Cache stuff
 
-        char     *is_coprime2310;
+        //char     *is_coprime2310;
 
         // Cached prime stuff
         uint32_t num_primes;
@@ -66,14 +61,15 @@ class GPUSieve {
         // uint32_t *remainders; // r = K mod p
         int32_t *neg_inv_Ks;  // r^1 mod p
 
-        char *composite;
         size_t composite_bytes;
+        uint8_t *composite;
         /**** END GPU POINTERS ****/
 
         // Host side
         size_t host_composite_bytes;
-        char* host_composite;
+        uint8_t* host_composite;
 
         mpz_t K;
-        uint32_t K_mod2310;
+        //uint32_t K_mod2310;
+        uint64_t M_start;
 };
