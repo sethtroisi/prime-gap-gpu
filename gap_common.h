@@ -51,6 +51,10 @@ struct Config {
     // GPU memory in MB allowed (probably ~10% error)
     int max_gpu_mem_mb = 4'000;
 
+    // Fraction of results to handle on CPU.
+    float cpu_fraction = 0.005;
+    int cpu_threads = 3;
+
     /**
      * -1: results only
      *  0: results & final stats

@@ -102,7 +102,7 @@ const size_t GPU_BATCH_SIZE = 4 * 1024;
 // Always use 1.
 const int ROUNDS = 1;
 
-const size_t CPU_SIEVE_LIMIT = 2'000'000;
+const size_t CPU_SIEVE_LIMIT = 8'000'000;
 
 //const size_t COMBINED_SIEVE_THREADS = 8;
 
@@ -238,7 +238,7 @@ class GPUBatch {
         }
 
         ~GPUBatch() {
-            cout << "~GPUBatch" << endl;
+            //cout << "~GPUBatch" << endl;
             for (size_t i = 0; i < elements; i++) {
                 mpz_clear(z_array[i]);
             }
@@ -577,16 +577,22 @@ void run_sieve_thread(void) {
     }
 }
 
-void run_overflow_thread(const mpz_t &K_in) {
-    try {
-        pthread_setname_np(pthread_self(), "CPU_OVERFLOW");
+std::atomic<uint64_t> overflow_tested;
+void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
+    //try {
+        {
+            char name[16];
+            sprintf(name, "CPU_OVERFLOW_%u\n", i);
+            pthread_setname_np(pthread_self(), name);
+        }
+
         mpz_t K, center, next_p, prev_p;
         mpz_init_set(K, K_in);
         mpz_init(center);
         mpz_init(next_p);
         mpz_init(prev_p);
 
-        StatsCounters stats(high_resolution_clock::now());
+        //StatsCounters stats(high_resolution_clock::now());
         struct Config config = sieve_data->config;
 
         double K_log = calc_log_K(config);
@@ -594,6 +600,9 @@ void run_overflow_thread(const mpz_t &K_in) {
         // See THEORY.md! Added const is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
         const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(config.m_inc));
+
+        // 2-5x what comes in per batch
+        const uint64_t overflow_too_much = config.m_inc * config.cpu_fraction;
 
         // TODO I think this is global later
         /*
@@ -607,9 +616,8 @@ void run_overflow_thread(const mpz_t &K_in) {
         }
         */
 
+        uint64_t tested = 0;
         std::unique_lock<std::mutex> lock(overflow_mtx, std::defer_lock);
-        size_t tested = 0;
-
         while (is_running) {
             // Important so that overflow_cv / unlock waits correctly
             if (!lock.owns_lock())
@@ -619,17 +627,21 @@ void run_overflow_thread(const mpz_t &K_in) {
 
             while (is_running && overflowed.size()) {
                 // process_results does most printing. This is to gauge overflow size.
-                if (tested % 1'000 == 0 && overflowed.size() > 50'000) {
+                if (overflow_tested % 10'000 == 0 && overflowed.size() > overflow_too_much) {
                     printf("\tCPU Sieve Queue: %lu open, %lu processed\n",
-                            overflowed.size(), tested);
+                            overflowed.size(), overflow_tested.load());
                 }
 
-                if (stop_queue > 0 && tested % 5'000 == 0) {
+                if (stop_queue > 0 && overflow_tested % 5'000 == 0) {
                     printf("\tFinalizing(stage %d): %lu open, %lu processed\n",
-                        stop_queue.load(), overflowed.size(), tested);
+                        stop_queue.load(), overflowed.size(), overflow_tested.load());
                 }
 
+                if (!lock.owns_lock())
+                    lock.lock();
                 auto m_and_x = overflowed.front(); overflowed.pop_front();
+                lock.unlock();
+
                 auto m = m_and_x.first;
                 auto min_x = m_and_x.second;
 
@@ -641,15 +653,15 @@ void run_overflow_thread(const mpz_t &K_in) {
 
                 if (next_gap < MIN_GAP_TO_CONTINUE) {
                     double merit = next_gap / (K_log + log(m));
-                    stats.process_results(config, m, 0, next_gap, 0, 1, merit);
-                    stats.s_skips_after_one_side += 1;
+                    //stats.process_results(config, m, 0, next_gap, 0, 1, merit);
+                    //stats.s_skips_after_one_side += 1;
                 } else {
                     mpz_prevprime(prev_p, center);
                     mpz_sub(prev_p, center, prev_p);
                     uint64_t prev_gap = mpz_get_ui(prev_p);
                     uint64_t gap = prev_gap + next_gap;
                     double merit = gap / (K_log + log(m));
-                    stats.process_results(config, m, prev_gap, next_gap, 1, 1, merit);
+                    //stats.process_results(config, m, prev_gap, next_gap, 1, 1, merit);
 
                     if (merit > min_merit) {
                         // Double check, we only performed a single round of rabin miller on many numbers.
@@ -667,9 +679,9 @@ void run_overflow_thread(const mpz_t &K_in) {
                                 gap, merit, m, config.p, config.d, prev_gap);
                     }
                 }
-                // TODO also pass in final X and verify tmp2 > X
 
-                tested += 1;
+                tested++;
+                overflow_tested++;
             }
 
             if (stop_queue == 2 && overflowed.empty()) {
@@ -677,16 +689,21 @@ void run_overflow_thread(const mpz_t &K_in) {
             }
         }
 
-        cout << "\tOverflowed " << tested << " intervals" << endl;
+        usleep(i * 10'000); // i * 10ms
+        if ((config.verbose + (i == 0)) >= 2) {
+            printf("\tCPU overflow(%u) tested %lu/%lu\n",
+                    i, tested, overflow_tested.load());
+        }
+
         mpz_clear(K);
         mpz_clear(center);
         mpz_clear(next_p);
         mpz_clear(prev_p);
-    } catch (const std::exception &e) {
-        cout << "ERROR in run_overflow_thread" << endl;
-        cout << e.what() << endl;
-        is_running = false;
-    }
+    //} catch (const std::exception &e) {
+    //    cout << "ERROR in run_cpu_overflow_thread" << endl;
+    //    cout << e.what() << endl;
+    //    is_running = false;
+    //}
 }
 
 
@@ -858,7 +875,7 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
     setup_sieve_data();
 
     // CPU sieving thread will start if unlocked and notified
-    overflow_cv.notify_one();
+    overflow_cv.notify_all();
 }
 
 
@@ -951,6 +968,7 @@ void run_testing_thread(const struct Config og_config) {
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
 
         const uint64_t count_valid_m = count_num_m(og_config.m_start, og_config.m_inc, D);
+        const uint64_t overflow_count = count_valid_m * sieve_data->config.cpu_fraction;
 
         // Print Header info
         if (og_config.verbose >= 1) {
@@ -965,7 +983,8 @@ void run_testing_thread(const struct Config og_config) {
 
             const uint64_t M_inc = og_config.m_inc;
             assert(count_valid_m > 0 && count_valid_m <= M_inc);
-            //printf("\nTesting ranges of %'ld ~ %'ld m per range.\n\n", M_inc, count_valid_m);
+            printf("\nTesting ranges of %'ld ~ %'ld m per range.\n", M_inc, count_valid_m);
+            printf("\tOverflowing to CPU when less than %lu active m\n\n", overflow_count);
             setlocale(LC_NUMERIC, "C");
 
             //printf("\tStarting to create GPU Batches\n");
@@ -1092,8 +1111,8 @@ void run_testing_thread(const struct Config og_config) {
 
                     // if all batches finished then move to next set
                     if (running_batches == 0 && d->test_i && d->test_i == d->unknown_m_i.size()) {
-                        if (sieve_data->unknown_m_i.size() < count_valid_m * .004) {
-                            // Less than 1% of original left
+                        // TODO technically this is less than cpu_fraction at start of X
+                        if (sieve_data->active_m_i.size() < overflow_count) {
                             push_to_overflow_and_increment_M_range(stats);
                             if (stop_queue)
                                 stop_queue += 1;
@@ -1138,7 +1157,7 @@ void run_testing_thread(const struct Config og_config) {
             mpz_clear(K);
         }
 
-        if (sieve_data->config.verbose >= 1) {
+        if (og_config.verbose >= 1) {
             double total = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
             printf("\nGPU Timings:\n");
             printf("\twaits on no active_m(10ms) : %ld\n", gpu_stats.wait_not_active);
@@ -1156,15 +1175,17 @@ void run_testing_thread(const struct Config og_config) {
             printf("\n");
         }
 
+        if (og_config.verbose >= 3)
+            printf("End of testing thread, Joining batch threads\n");
         // Send notifies (to wake up GPU thread and stop conditional waiting)
-        printf("End of testing thread, Joining batch threads\n");
         for (auto& gpu_batch : gpu_batches) {
             gpu_batch.cv.notify_all();
         }
         size_t i = 0;
         for (auto & gpu_thread : gpu_threads) {
             gpu_thread.join();
-            cout << "\tbatch gpu thread(" << i << ") joined" << endl;
+            if (og_config.verbose >= 3)
+                cout << "\tbatch gpu thread(" << i << ") joined" << endl;
             i++;
         }
     } catch (const std::exception &e) {
@@ -1242,25 +1263,34 @@ void prime_gap_test(struct Config config) {
                duration<double>(s_stop_t - s_start_t).count());
     }
     std::thread sieve_thread(run_sieve_thread);
-    std::thread overflow_sieve_thread(run_overflow_thread, std::ref(K));
 
-    // WHAT IS SIGNAL I'M DONE?
-    while (stop_queue == 0) {
+    vector<std::thread> overflow_threads;
+    for(size_t i = 0; i < (unsigned)config.cpu_threads; i++) {
+        overflow_threads.emplace_back(run_cpu_overflow_thread, i, std::ref(K));
+    }
+
+    while (is_running && stop_queue == 0) {
         usleep(100'000); // 100ms
     }
 
-    cout << "Joining threads" << endl;
+    if (config.verbose >= 3)
+        cout << "Joining threads" << endl;
 
     // Tell other threads to quit
     {
         sieve_thread.join();
-        cout << "\tsieve joined" << endl;
+        if (config.verbose >= 3)
+            cout << "\tsieve joined" << endl;
         testing_thread.join();
-        cout << "\ttesting joined" << endl;
+        if (config.verbose >= 3)
+            cout << "\ttesting joined" << endl;
 
         overflow_cv.notify_all();  // wake up all overflow thread
-        overflow_sieve_thread.join();
-        cout << "\toverflow joined" << endl;
+        for (auto& thread : overflow_threads) {
+            thread.join();
+        }
+        if (config.verbose >= 3)
+            cout << "\tAll CPU overflows joined" << endl;
     }
 
     mpz_clear(K);

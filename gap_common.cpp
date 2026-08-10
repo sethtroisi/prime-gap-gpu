@@ -380,6 +380,8 @@ if (program == Pr::SEARCH_GPU) {
     cout << "    use primes <= max-prime (in millions) for checking composite" << endl;
     cout << endl;
     cout << "  --max_mem <max gpu memory in MB>" << endl;
+    cout << "  --cpu-fraction <fraction of results to finalize on CPU>" << endl;
+    cout << "  --cpu-threads <number of CPU threads for finalizing>" << endl;
 }
     cout << endl;
     cout << "[OPTIONAL]" << endl;
@@ -407,6 +409,8 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         {"max-prime",        required_argument, 0,   5  },
 
         {"max-mem",          required_argument, 0,   6  },
+        {"cpu-fraction",     required_argument, 0,   7  },
+        {"cpu-threads",      required_argument, 0,   8  },
 
         // Secret option
         {"hide-timing",      no_argument,       0,  11  },
@@ -464,6 +468,12 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
             case 6:
                 config.max_gpu_mem_mb = atol(optarg);
+                break;
+            case 7:
+                config.cpu_fraction = atof(optarg);
+                break;
+            case 8:
+                config.cpu_threads = atoi(optarg);
                 break;
 
             case 11:
@@ -555,6 +565,26 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
     if (config.d <= 0) {
         config.valid = 0;
         cout << "d must be greater than 0: " << config.d << endl;
+    }
+
+    if (config.max_gpu_mem_mb < 200) {
+        config.valid = 0;
+        cout << "max-mem must be greater than 200: " << config.max_gpu_mem_mb << endl;
+    }
+
+    if (config.max_gpu_mem_mb > 64'000) {
+        config.valid = 0;
+        cout << "max-mem can't be larger than 64'000: " << config.max_gpu_mem_mb << endl;
+    }
+
+    if (config.cpu_fraction < .00001 || config.cpu_fraction > .1) {
+        config.valid = 0;
+        cout << "cpu-fraction must be between .00001 and .1: " << config.cpu_fraction << endl;
+    }
+
+    if (config.cpu_threads < 1 || config.cpu_threads > 159) {
+        config.valid = 0;
+        cout << "cpu-threads must be between 1 and 159: " << config.cpu_threads << endl;
     }
 
     if (config.valid == 0) {
