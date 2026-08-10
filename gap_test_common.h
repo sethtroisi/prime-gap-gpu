@@ -66,7 +66,7 @@ class StatsCounters {
             float merit);
 
         bool possibly_print_stats(
-            const Config &config) const;
+            const std::string name, const Config &config) const;
 };
 
 

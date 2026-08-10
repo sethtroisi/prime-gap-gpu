@@ -49,13 +49,15 @@ void StatsCounters::process_results(
         s_best_merit_interval_m = m;
     }
 
-    if (possibly_print_stats(config)) {
+    if (possibly_print_stats("CPU", config)) {
         s_best_merit_interval = 0;
         s_best_merit_interval_m = 0;
     }
 }
 
-bool StatsCounters::possibly_print_stats(const Config &config) const {
+bool StatsCounters::possibly_print_stats(
+        const std::string name,
+        const Config &config) const {
 
     // truncate to a nearby multiple of 10000 (avoid making zero)
     size_t print_interval = 1800 * s_tests_per_second;
@@ -76,11 +78,11 @@ bool StatsCounters::possibly_print_stats(const Config &config) const {
         if (config.verbose >= 1) {
             // Stats!
             if (s_tests > secs) {
-                printf("\t    tests     %-10lu (%.2f/sec)  %.0f seconds elapsed\n",
-                    s_tests, s_tests / secs, secs);
+                printf("\t%s tests     %-10lu (%.2f/sec)  %.0f seconds elapsed\n",
+                    name.c_str(), s_tests, s_tests / secs, secs);
             } else {
-                printf("\t    tests     %-10lu (%.2f secs/test)  %.0f seconds elapsed\n",
-                    s_tests, secs / s_tests, secs);
+                printf("\t%s tests     %-10lu (%.2f secs/test)  %.0f seconds elapsed\n",
+                    name.c_str(), s_tests, secs / s_tests, secs);
             }
 
             printf("\t    prp tests %-10ld (avg: %.2f) (%.1f tests/sec)\n",
