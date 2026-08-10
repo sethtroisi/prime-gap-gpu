@@ -80,12 +80,12 @@ void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NU
 // }
 
 /** Called by host executed on device. */
-__global__ void method2_medium_primes_kernal(
+__global__ void method2_small_primes_kernal(
     int64_t *thread_stats,
 
     /** config section **/
-    const uint64_t M_start,
-    const uint32_t M_inc,
+    const uint64_t global_M_start,
+    const uint32_t global_M_inc,
     const uint32_t X,
 
     uint8_t *composite,
@@ -103,18 +103,96 @@ __global__ void method2_medium_primes_kernal(
     assert( gridDim.x == GRID_SIZE );
     assert( blockDim.x == BLOCK_SIZE );
 
-    // TODO with block/thread splitting pi/coprime backwards
-    // uint32_t print_mult = 10000;
-    // uint32_t next_print = print_mult;
-    // uint32_t next_mult = 5 * print_mult;
+    // For small primes everyone works on every prime at the sametime
+    // this probably keeps threads in sync more
 
-    uint32_t small_factors = 10;
+    uint32_t threads = BLOCK_SIZE;
+    uint32_t thread_idx = threadIdx.x;
 
-    assert( BLOCK_SIZE == 64 );
-    uint32_t pi_0 = (blockIdx.x << 1) + (threadIdx.x & 1);
+    // Each block handles 1 prime
+    // Each thread handles a portion of M_inc
+    // [global_M_start, global_M_inc) -> [thread_M_start, thread_M_inc)
+    uint64_t thread_offset = global_M_inc * thread_idx / threads;
+    uint64_t thread_offset_next = global_M_inc * (thread_idx + 1) / threads;
+    uint64_t thread_M_start = global_M_start + thread_offset;
+    uint64_t thread_M_inc = thread_offset_next;
 
+    const uint8_t M_parity_check = thread_M_start & 1;
 
-    for (uint32_t pi = pi_0; pi < num_primes; pi += GRID_SIZE) {
+    for (uint32_t pi = blockIdx.x; pi < num_primes; pi += GRID_SIZE) {
+        const uint32_t prime = primes[pi];
+        const int32_t neg_inv_K = neg_inv_Ks[pi];
+
+        // -M_start % p
+        int64_t mi_0_shift = prime - (thread_M_start % prime);
+        if (mi_0_shift == prime) {
+            mi_0_shift = 0;
+        }
+
+        uint32_t shift = prime << 1;
+
+        // Safe from overflow as (SL * prime + prime) < int64
+        int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
+        // benchmark as "? prime : 0" vs "* prime";
+        mi_0 += (((X ^ mi_0) & 1) == M_parity_check) * prime;
+
+        // mi_0 is indexed from thread_M_start
+        // Add thread_offset to correct for position in composite.
+        uint32_t mi = mi_0 + thread_offset;
+
+        for (; mi < thread_M_inc; mi += shift) {
+            // TODO if (...) continue code only makes GPU 10% faster
+            // Maybe replace with is_m_coprime will be a better check, given fast memory.
+
+            // After initial value this increases by (shift * K_mod2310) % 2310
+            //uint32_t n_mod2310 = ((K_mod2310 * m_mod2310) + X) % 2310;
+            //uint32_t n_mod2310 = mod2310((K_mod2310 * m_mod2310) + X);
+
+#ifdef BIT_IS_BIT
+            // TODO 1<<(index&7) this could be extracted to the top to save a few operations
+            composite[mi >> 3] |= 1 << (mi & 7);
+#else
+            composite[mi] = true;
+#endif  // BIT_IS_BIT
+        }
+    }
+
+    uint64_t t1 = clock64();
+}
+
+/** Called by host executed on device. */
+__global__ void method2_medium_primes_kernal(
+    int64_t *thread_stats,
+
+    /** config section **/
+    const uint64_t M_start,
+    const uint32_t M_inc,
+    const uint32_t X,
+
+    uint8_t *composite,
+
+    uint32_t num_primes,
+    uint32_t *primes,
+    // uint32_t *remainders, // r = K mod p
+    int32_t *neg_inv_Ks      // r^-1 mod p
+) {
+    uint64_t t0 = clock64();
+    uint32_t small_factors = 0;
+
+    // Indexing is hard for me
+    // blockIdx.x / gridDim.x
+    // threadIdx.x / blockDim.x
+    assert( gridDim.x == GRID_SIZE );
+    assert( blockDim.x == BLOCK_SIZE );
+
+    // TODO verify threading is only handling each prime once.
+    uint32_t threads = GRID_SIZE * BLOCK_SIZE;
+    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    const uint8_t M_parity_check = M_start & 1;
+
+    uint32_t pi_0 = thread_idx;
+    for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
     //for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
         const uint32_t prime = primes[pi];
         //const uint32_t base_r = remainders[pi];
@@ -146,7 +224,6 @@ __global__ void method2_medium_primes_kernal(
             mi_0_shift = 0;
         }
 
-        const uint8_t M_parity_check = M_start & 1;
         uint32_t shift = prime << 1;
 
         {
@@ -226,18 +303,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
 
     // ----- Allocate memory
 
-    // Various pre-calculated arrays of is_coprime arrays
-
-    { // Output setup
-        // TODO any other variables?
-        M_start       = config.m_start;
-        //K_mod2310 = caches.K_mod2310;
-        // Only one copy of these two
-        {
-        //    m_inc.swap(caches.valid_mi);
-        //    host_reindex.swap(caches.m_reindex);
-        }
-    }
+    this->verbose = config.verbose;
 
     { // GPU Setup part
         auto T0 = high_resolution_clock::now();
@@ -257,8 +323,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
             assert( prime == 3 );
             num_primes = 0;
             for (; prime <= config.max_prime; prime = iter.next_prime()) {
-                // TODO THIS MAKES IT 7x FASTER!
-                if (prime <= config.p) { // TODO how to handle these && config.d % prime != 0) {
+                if (prime <= config.p && config.d % prime != 0) {
                     continue;
                 }
 
@@ -340,26 +405,41 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
     { // Run GPU Sieve!
         auto T0 = high_resolution_clock::now();
         CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
-        method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+
+        num_small_primes = 200;
+        // TODO print out n'th prime or something.
+
+        method2_small_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
             this->thread_stats,
-
-            m_start,
-            m_inc,
-            X,
-
+            m_start, m_inc, X,
             this->composite,
-
-            this->num_primes,
+            this->num_small_primes,
             this->primes,
-            // this->remainders,
             this->neg_inv_Ks
         );
 
         cudaStreamSynchronize(runner);
 
         auto T1 = high_resolution_clock::now();
-        auto kernel_ms = duration_cast<milliseconds>(T1 - T0).count();
-        cout << "GPU sieve: " << kernel_ms << " ms" << endl;
+
+        method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+            this->thread_stats,
+            m_start, m_inc, X,
+            this->composite,
+            this->num_primes - this->num_small_primes,
+            this->primes + this->num_small_primes,
+            this->neg_inv_Ks + this->num_small_primes
+        );
+
+        cudaStreamSynchronize(runner);
+
+        if (verbose >= 2) {
+            auto T2 = high_resolution_clock::now();
+            auto kernel1_ms = duration_cast<milliseconds>(T1 - T0).count();
+            auto kernel2_ms = duration_cast<milliseconds>(T2 - T1).count();
+            auto kernel_ms = duration_cast<milliseconds>(T2 - T0).count();
+            printf("GPU sieve %lu = %lu + %lu ms\n", kernel_ms, kernel1_ms, kernel2_ms);
+        }
     }
 
     if (0) { // Read thread stats
@@ -402,18 +482,20 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
 #endif  // BIT_IS_BIT
         }
 
+        if (verbose >= 3) {
 #ifdef BIT_IS_BIT
-        uint32_t num_composite = 0;
-        for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
-            num_composite += __builtin_popcount(host_composite[mi]);
-        }
+            uint32_t num_composite = 0;
+            for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
+                num_composite += __builtin_popcount(host_composite[mi]);
+            }
 #else
-        uint32_t num_composite = std::count(host_composite, host_composite + host_composite_bytes, 1);
+            uint32_t num_composite = std::count(host_composite, host_composite + host_composite_bytes, 1);
 #endif  // BIT_IS_BIT
 
-        auto T1 = high_resolution_clock::now();
-        auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
-        printf("\tGPU copy-back: %lu ms | %u/%lu composite\n", bitfiddling_ms, num_composite, m_inc);
+            auto T1 = high_resolution_clock::now();
+            auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
+            printf("\tGPU copy-back: %lu ms | %u/%lu composite\n", bitfiddling_ms, num_composite, m_inc);
+        }
     }
 
     return host_composite;

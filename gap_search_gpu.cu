@@ -42,7 +42,8 @@
 #include "gap_common.h"
 #include "gap_test_common.h"
 
-// #define GPU_SIEVE
+#define GPU_SIEVE
+//#define GPU_SIEVE_VERIFY
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -511,81 +512,85 @@ void run_sieve_thread(void) {
             lock.unlock();
 
             const auto m_start = config.m_start;
-            const uint32_t M_parity_check = m_start & 1;
-            if (1) {
-                std::fill(composites.begin(), composites.end(), 0);
-                assert (config.d % 2 == 0);
-                uint64_t m_0 = m_start + local_active_m_i.front();
-                assert (m_0 % 2 == 1);
-                // verify K (odd) + X is not divisibly by 2
-                assert ( X % 2 == 0 );
-
-                // Handle evens, maybe isn't needed?
-                for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
-                    composites[m_i >> 3] |= 1 << (m_i & 7);
-                }
-
-                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
-                    // if ((m * K + X) % p == 0) {
-                    // if ((m * K) % p == -X) {
-                    // if ((m * K * inv_K) % p == -X * inv_K) {
-                    //uint64_t m_0 = (-X * inv_K) % prime;
-
-                    uint64_t m_start_shift = m_start % prime;
-                    m_start_shift = prime - m_start_shift + prime * (m_start_shift == prime);
-                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
-
-                    if (prime < m_inc) {
-                        // This requires K odd (checked above).
-                        if (((X ^ mi_0) & 1) == M_parity_check)
-                            mi_0 += prime;
-
-                        uint32_t shift = 2*prime;
-                        for (uint64_t t = mi_0; t < m_inc; t += shift) {
-                            composites[t >> 3] |= 1 << (t & 7);
-                        }
-
-                    } else {
-                        //  make this branchless, safe to write to composites[m_inc]
-                        uint64_t index = mi_0 < m_inc ? mi_0 : m_inc;
-                        composites[index >> 3] |= 1 << (index & 7);
-                    }
-
-                }
-            }
 
 #ifdef GPU_SIEVE
             uint8_t *test = gpu_sieve.run(m_start, m_inc, X);
+#endif // GPU_SIEVE
+#if !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
+            const uint32_t M_parity_check = m_start & 1;
 
-            if (0) {
-                uint32_t num_composite = 0;
-                for (uint8_t c : composites) {
-                    num_composite += __builtin_popcount(c);
-                }
+            std::fill(composites.begin(), composites.end(), 0);
+            assert (config.d % 2 == 0);
+            uint64_t m_0 = m_start + local_active_m_i.front();
+            assert (m_0 % 2 == 1);
+            // verify K (odd) + X is not divisibly by 2
+            assert ( X % 2 == 0 );
 
-                uint32_t mismatches = 0;
-                for (uint32_t m_i = 0; m_i < m_inc; m_i++) {
-                    uint8_t cpu_bit = (composites[m_i >> 3] & (1 << (m_i & 7))) > 0;
-                    mismatches += test[m_i] != cpu_bit;
-                    if (m_i > 199800 && test[m_i] != cpu_bit) {
-                        printf("Mismatch at m=%u\n X=%u | CPU: %u, GPU: %u\n",
-                                m_i, X, cpu_bit, test[m_i]);
+            // Handle evens, maybe isn't needed?
+            for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
+                composites[m_i >> 3] |= 1 << (m_i & 7);
+            }
+
+            for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
+                // if ((m * K + X) % p == 0) {
+                // if ((m * K) % p == -X) {
+                // if ((m * K * inv_K) % p == -X * inv_K) {
+                //uint64_t m_0 = (-X * inv_K) % prime;
+
+                uint64_t m_start_shift = m_start % prime;
+                m_start_shift = prime - m_start_shift + prime * (m_start_shift == prime);
+                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+
+                if (prime < m_inc) {
+                    // This requires K odd (checked above).
+                    if (((X ^ mi_0) & 1) == M_parity_check)
+                        mi_0 += prime;
+
+                    uint32_t shift = 2*prime;
+                    for (uint64_t t = mi_0; t < m_inc; t += shift) {
+                        composites[t >> 3] |= 1 << (t & 7);
                     }
+
+                } else {
+                    //  make this branchless, safe to write to composites[m_inc]
+                    uint64_t index = mi_0 < m_inc ? mi_0 : m_inc;
+                    composites[index >> 3] |= 1 << (index & 7);
                 }
-                printf("GPU/CPU sieve mismatches: %u | CPU composites: %u\n", mismatches, num_composite);
-                if (mismatches) {
-                    is_running = false;
-                    exit(0);
+
+            }
+#endif // !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
+
+#if defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
+            uint32_t num_composite = 0;
+            for (uint8_t c : composites) {
+                num_composite += __builtin_popcount(c);
+            }
+
+            uint32_t mismatches = 0;
+            for (uint32_t m_i = 0; m_i < m_inc; m_i++) {
+                uint8_t cpu_bit = (composites[m_i >> 3] & (1 << (m_i & 7))) > 0;
+                mismatches += test[m_i] != cpu_bit;
+                if (m_i + 200 > m_inc && test[m_i] != cpu_bit) {
+                    printf("Mismatch at m=%u\n X=%u | CPU: %u, GPU: %u\n",
+                            m_i, X, cpu_bit, test[m_i]);
                 }
             }
-#endif // GPU_SIEVE
+            printf("GPU/CPU sieve mismatches: %u | CPU composites: %u\n", mismatches, num_composite);
+            if (mismatches) {
+                is_running = false;
+                exit(0);
+            }
+#endif // defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
 
             // "most" (90%+) should be composite, so this should be ~10%
             vector<uint32_t> unknowns_i;
             unknowns_i.reserve(local_active_m_i.size() / 10);
             for (auto m_i : local_active_m_i) {
+#ifdef GPU_SIEVE
+                if (!test[m_i]) {
+#else
                 if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
-                //if (!test[m_i]) {
+#endif // GPU_SIEVE
                     unknowns_i.push_back(m_i);
 
                     if (0) {
@@ -1282,9 +1287,18 @@ void signal_callback_handler(int) {
 void prime_gap_test(struct Config config) {
     // Setup test runner
     printf("\n");
+#ifdef GPU_TESTING
+    printf("TESTING PRIMES ON GPU\n");
     printf("BITS=%d\n", BITS);
     printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
     printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
+#endif // GPU_TESTING
+#ifdef GPU_SIEVE
+    printf("SIEVING ON GPU\n");
+#endif
+#if defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
+    printf("VERIFYING GPU SIEVING ON CPU\N");
+#endif // defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
 
     assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 || GPU_BATCH_SIZE == 4096 ||
             GPU_BATCH_SIZE == 8192 || GPU_BATCH_SIZE ==16384 || GPU_BATCH_SIZE ==32768 );

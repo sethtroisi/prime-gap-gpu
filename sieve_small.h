@@ -23,8 +23,8 @@
 #include "gap_common.h"
 
 // TODO figure out what to set here
-#define GRID_SIZE 1024
-#define BLOCK_SIZE 64
+#define GRID_SIZE 32
+#define BLOCK_SIZE 32
 
 using std::vector;
 
@@ -56,6 +56,7 @@ class GPUSieve {
 
         // Cached prime stuff
         uint32_t num_primes;
+        uint32_t num_small_primes;
         uint32_t *primes;
         // Remainders isn't actually used!
         // uint32_t *remainders; // r = K mod p
@@ -71,5 +72,6 @@ class GPUSieve {
 
         mpz_t K;
         //uint32_t K_mod2310;
-        uint64_t M_start;
+
+        uint32_t verbose = 0;
 };
