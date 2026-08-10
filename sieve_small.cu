@@ -257,7 +257,8 @@ GPUSieve::GPUSieve(const struct Config& config) {
             assert( prime == 3 );
             num_primes = 0;
             for (; prime <= config.max_prime; prime = iter.next_prime()) {
-                if (prime <= config.p && config.d % prime != 0) {
+                // TODO THIS MAKES IT 7x FASTER!
+                if (prime <= config.p) { // TODO how to handle these && config.d % prime != 0) {
                     continue;
                 }
 
@@ -358,7 +359,7 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
 
         auto T1 = high_resolution_clock::now();
         auto kernel_ms = duration_cast<milliseconds>(T1 - T0).count();
-        //cout << "GPU sieve: " << kernel_ms << " ms" << endl;
+        cout << "GPU sieve: " << kernel_ms << " ms" << endl;
     }
 
     if (0) { // Read thread stats
@@ -412,7 +413,7 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
 
         auto T1 = high_resolution_clock::now();
         auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
-        //printf("\tGPU copy-back: %lu ms | %u/%lu composite\n", bitfiddling_ms, num_composite, m_inc);
+        printf("\tGPU copy-back: %lu ms | %u/%lu composite\n", bitfiddling_ms, num_composite, m_inc);
     }
 
     return host_composite;

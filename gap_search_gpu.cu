@@ -41,8 +41,19 @@
 
 #include "gap_common.h"
 #include "gap_test_common.h"
+
+// #define GPU_SIEVE
+
+#ifdef GPU_SIEVE
 #include "sieve_small.h"
+#endif // GPU_SIEVE
+
+
+#define GPU_TESTING
+
+#ifdef GPU_TESTING
 #include "miller_rabin.h"
+#endif // GPU_TESTING
 
 using std::cout;
 using std::cerr;
@@ -208,7 +219,7 @@ class GPUBatch {
         vector<uint32_t> m_i;
 
         // If z[i] should be tested
-        vector<char>  active;
+        vector<uint8_t>  active;
         // Result from GPU
         vector<int>  result;
 
@@ -320,9 +331,11 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             pthread_setname_np(pthread_self(), name.c_str());
         }
 
+#ifdef GPU_TESTING
         // TODO test changing cudaDeviceScheduleBlockingSync to cudaDeviceScheduleYield or cudaDeviceScheduleSpin
         typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
         test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+#endif // GPU_TESTING
 
         size_t processed_batches = 0;
         std::unique_lock lock(batch.mutex, std::defer_lock);
@@ -338,26 +351,26 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             // Active items are all at the front of the batch.
             auto mid = batch.active.begin();
             std::advance(mid, batch.i);
-            assert(std::count(batch.active.begin(), mid, 1) == batch.i);
+            assert((uint32_t) std::count(batch.active.begin(), mid, 1) == batch.i);
             assert(std::count(mid,   batch.active.end(), 1) == 0);
             batch.gpu_start = high_resolution_clock::now();
             lock.unlock();
 
             // Run batch on GPU and wait for results to be set
-            if (1) {
-                if (verbose >= 4)
-                    printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
-                runner.run_test(batch.i, batch.z, batch.result);
-                if (verbose >= 4)
-                    printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
-            } else {
-                // Return true for 1/10 results (helps not overflow sieve)
-                for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
-                    if (batch.active[gpu_i]) {
-                        batch.result[gpu_i] = (std::rand() % 10) == 1;
-                    }
+#ifdef GPU_TESTING
+            if (verbose >= 4)
+                printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
+            runner.run_test(batch.i, batch.z, batch.result);
+            if (verbose >= 4)
+                printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
+#else
+            // Return true for 1/10 results (helps not overflow sieve)
+            for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
+                if (batch.active[gpu_i]) {
+                    batch.result[gpu_i] = (std::rand() % 10) == 1;
                 }
             }
+#endif // GPU_TESTING
 
             lock.lock();
 
@@ -435,7 +448,7 @@ void run_sieve_thread(void) {
                 const uint32_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 < base_r && base_r < prime );
                 const int32_t inv_K = _invert(base_r, prime);
-                assert( 0 < inv_K && inv_K < prime );
+                assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
                 assert( ((uint64_t) inv_K * base_r) % prime == 1 );
                 p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
 
@@ -445,7 +458,9 @@ void run_sieve_thread(void) {
             }
         }
 
+#ifdef GPU_SIEVE
         GPUSieve gpu_sieve(config);
+#endif // GPU_SIEVE
 
         assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
 
@@ -492,20 +507,20 @@ void run_sieve_thread(void) {
 
             assert(sieve_data->next_tests_m_i.size() == 0);
             local_active_m_i = sieve_data->active_m_i;
-            //std::fill(composites.begin(), composites.end(), 0);
             config = sieve_data->config;
             lock.unlock();
 
             const auto m_start = config.m_start;
             const uint32_t M_parity_check = m_start & 1;
-            if (0) {
+            if (1) {
+                std::fill(composites.begin(), composites.end(), 0);
                 assert (config.d % 2 == 0);
                 uint64_t m_0 = m_start + local_active_m_i.front();
                 assert (m_0 % 2 == 1);
                 // verify K (odd) + X is not divisibly by 2
                 assert ( X % 2 == 0 );
 
-                // TODO this maybe isn't needed?
+                // Handle evens, maybe isn't needed?
                 for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
                     composites[m_i >> 3] |= 1 << (m_i & 7);
                 }
@@ -539,6 +554,7 @@ void run_sieve_thread(void) {
                 }
             }
 
+#ifdef GPU_SIEVE
             uint8_t *test = gpu_sieve.run(m_start, m_inc, X);
 
             if (0) {
@@ -562,13 +578,14 @@ void run_sieve_thread(void) {
                     exit(0);
                 }
             }
+#endif // GPU_SIEVE
 
             // "most" (90%+) should be composite, so this should be ~10%
             vector<uint32_t> unknowns_i;
             unknowns_i.reserve(local_active_m_i.size() / 10);
             for (auto m_i : local_active_m_i) {
-                //if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
-                if (!(test[m_i >> 3] & 1 << (m_i & 7))) {
+                if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
+                //if (!test[m_i]) {
                     unknowns_i.push_back(m_i);
 
                     if (0) {
@@ -582,7 +599,7 @@ void run_sieve_thread(void) {
                     }
                 }
             }
-            assert(!unknowns_i.empty());
+            assert(local_active_m_i.size() < 400 || !unknowns_i.empty());
             total_active += local_active_m_i.size();
             total_unknown += unknowns_i.size();
 
@@ -613,6 +630,8 @@ void run_sieve_thread(void) {
             lock.unlock();
         }
 
+        mpz_clear(K);
+
         if (config.verbose >= 1) {
             double total_s = duration<double>(high_resolution_clock::now() - s_thread_start_t).count();
             printf("SIEVE Timings:\n");
@@ -636,7 +655,7 @@ void run_sieve_thread(void) {
 
 std::atomic<uint64_t> overflow_tested;
 void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
-    //try {
+    try {
         {
             char name[16];
             sprintf(name, "CPU_OVERFLOW_%u\n", i);
@@ -663,12 +682,12 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
 
         uint64_t tested = 0;
         std::unique_lock<std::mutex> lock(overflow_mtx, std::defer_lock);
-        while (is_running) {
+        while (is_running && (stop_queue < 2 || overflowed.size() > 0)) {
             // Important so that overflow_cv / unlock waits correctly
             if (!lock.owns_lock())
                 lock.lock();
             // Lock IS NOT held while waiting.
-            overflow_cv.wait(lock, []{ return overflowed.size() || !is_running; });
+            overflow_cv.wait(lock, []{ return overflowed.size() || !is_running || stop_queue >= 2; });
 
             while (is_running && overflowed.size()) {
                 // process_results does most printing. This is to gauge overflow size.
@@ -697,7 +716,7 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                 uint64_t next_gap = mpz_get_ui(next_p);
 
                 if (next_gap < MIN_GAP_TO_CONTINUE) {
-                    double merit = next_gap / (K_log + log(m));
+                    //double merit = next_gap / (K_log + log(m));
                     //stats.process_results(config, m, 0, next_gap, 0, 1, merit);
                     //stats.s_skips_after_one_side += 1;
                 } else {
@@ -728,10 +747,6 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                 tested++;
                 overflow_tested++;
             }
-
-            if (stop_queue == 2 && overflowed.empty()) {
-                break;
-            }
         }
 
         if ((config.verbose + (i == 0)) >= 2) {
@@ -744,11 +759,11 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
         mpz_clear(center);
         mpz_clear(next_p);
         mpz_clear(prev_p);
-    //} catch (const std::exception &e) {
-    //    cout << "ERROR in run_cpu_overflow_thread" << endl;
-    //    cout << e.what() << endl;
-    //    is_running = false;
-    //}
+    } catch (const std::exception &e) {
+        cout << "ERROR in run_cpu_overflow_thread" << endl;
+        cout << e.what() << endl;
+        is_running = false;
+    }
 }
 
 
@@ -858,7 +873,6 @@ void increment_X() {
 
     // asserting next sieve is already done.
     assert(sieve_data->current_sieve_x > sieve_data->current_testing_x);
-    uint64_t jump = sieve_data->current_sieve_x - sieve_data->current_testing_x;
     sieve_data->current_testing_x = sieve_data->current_sieve_x;
     if (sieve_data->config.verbose >= 3 && sieve_data->current_testing_x % 300 <= 1) {
         printf("\nMoving to X=%ld\n", sieve_data->current_testing_x);
@@ -1150,9 +1164,11 @@ void run_testing_thread(const struct Config og_config) {
                     SieveData *d = sieve_data.get();
                     stats.s_total_prp_tests += batch.i;
 
-                    //printf("\tGot Finished Batch(%d)=%u prime | %lu running, %lu/%lu\n",
-                    //        i, primes_in_batch,
-                    //        running_batches, d->test_i, d->unknown_m_i.size());
+                    if (og_config.verbose >= 3) {
+                        printf("\tGot Finished Batch(%d)=%u prime | %lu running, %lu/%lu\n",
+                                i, primes_in_batch,
+                                running_batches, d->test_i, d->unknown_m_i.size());
+                    }
 
                     // if all batches finished then move to next set
                     if (running_batches == 0 && d->test_i && d->test_i == d->unknown_m_i.size()) {
@@ -1276,6 +1292,8 @@ void prime_gap_test(struct Config config) {
     mpz_t K;
     {
         init_K(config, K);
+
+#ifdef GPU
         // +4 is just is personal safety blanket buffer.
         size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.m_start + 1000ul * config.m_inc) + 4;
 
@@ -1291,6 +1309,7 @@ void prime_gap_test(struct Config config) {
         }
         assert( (N_bits + 1) < BITS ); // See last debug line.
         assert( BITS <= (1 << (2 * WINDOW_BITS)) );
+#endif  // GPU
     }
 
     is_running = true;
@@ -1343,6 +1362,7 @@ void prime_gap_test(struct Config config) {
         for (auto& thread : overflow_threads) {
             thread.join();
         }
+        overflow_threads.clear();
         if (config.verbose >= 3)
             cout << "\tAll CPU overflows joined" << endl;
     }

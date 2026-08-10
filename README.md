@@ -33,6 +33,12 @@ $ git clone https://github.com/sethtroisi/prime-gap-gpu.git
 $ cd prime-gap-gpu
 ```
 
+## Misc
+
+```
+valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
+```
+
 ## TODO
 
  * [ ] `save_partial_at_exit` save offset (and what merit this represents) + currently active M.
