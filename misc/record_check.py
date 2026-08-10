@@ -46,11 +46,6 @@ def get_arg_parser():
         help="individual log files (e.g. logs/2221*)")
 
     parser.add_argument(
-        '--search-db', type=str,
-        default="prime-gap-search.db",
-        help="Prime database from gap_test (or \"ignore\" to skip)")
-
-    parser.add_argument(
         '--prime-gaps-db', type=str,
         default="gaps.db",
         help="Prime gap database see github.com/primegap-list-project/prime-gap-list")
@@ -224,8 +219,8 @@ def search_logs(log_files):
     # 32280  10.9749  5641 * 3001#/2310 -18514 to +13766
     record_format = re.compile(
         r"(\d+)\s+(\d+\.\d+)\s+"
-        r"(\d+)\s*(\*)\s*(\d+#)(/\d+#?)\s+"
-        r"(-\d+)")
+        r"(\d+)\s*(\*)\s*(\d+#)(\s*/\s*\d+#?)\s+"
+        r"(-\s*\d+)")
 
     assert any(map(os.path.isfile, log_files)), "Log files not present: " + ",".join(log_files)
 
@@ -283,46 +278,6 @@ def search_logs(log_files):
             ", ".join(log_files)))
 
 
-def search_db(args):
-    assert os.path.exists(args.search_db)
-
-    gaps = []
-    with sqlite3.connect(args.search_db, timeout=30) as conn:
-        conn.row_factory = sqlite3.Row
-
-        num_gaps = conn.execute('SELECT COUNT(*) FROM result').fetchone()[0]
-        assert num_gaps > 100, num_gaps
-        print(f"{num_gaps} results in {args.search_db!r}")
-
-        # Min gap for current record (filters 80% of results)
-        existing = conn.execute(
-            """SELECT p, d, m, next_p, prev_p, next_p + prev_p as gapsize, merit FROM result
-            WHERE  (next_p > 0 AND prev_p > 0) AND
-                    ((merit > 21.9) OR
-                    (gapsize > 30000 AND merit > 18.3) OR
-                    (gapsize > 50000 AND merit > 15.3) OR
-                    (gapsize > 70000 AND merit > 10.4) OR
-                    (gapsize > 100000))"""
-        ).fetchall()
-        for gap in existing:
-            gapsize = gap['gapsize']
-            merit = gap['merit']
-            number = "{} * {}#/{} -{}".format(
-                gap["m"], gap["P"], gap["D"], gap["prev_p"])
-
-            submit = "{:6d}  {:.3f}  {} to +{}".format(
-                gapsize, merit,
-                number, gap["next_p"])
-
-            gaps.append((
-                gapsize, merit, submit, number,
-                ", ".join(f"{k}={gap[k]}" for k in ('p', 'd', 'm', 'prev_p', 'next_p')),
-            ))
-
-    describe_found_gaps(gaps)
-    print_record_gaps(args, gaps)
-
-
 if __name__ == "__main__":
     parser = get_arg_parser()
     args = parser.parse_args()
@@ -339,10 +294,6 @@ if __name__ == "__main__":
         neither = False
         search_logs(args.log_files)
 
-    if os.path.isfile(args.search_db):
-        neither = False
-        search_db(args)
-
     if neither:
-        print("Must pass --log-files, --logs-directory, or --search-db 'gaps.db'")
+        print("Must pass --log-files or --logs-directory")
         sys.exit(1)
