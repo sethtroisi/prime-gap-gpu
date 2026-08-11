@@ -42,7 +42,7 @@
 #include "gap_common.h"
 #include "gap_test_common.h"
 
-#define GPU_SIEVE
+//#define GPU_SIEVE
 //#define GPU_SIEVE_VERIFY
 
 #ifdef GPU_SIEVE
@@ -166,6 +166,9 @@ class SieveData {
         State state = NEW;
 
         struct Config config;
+
+        /* Number of valid m_i for [m_start, m_start + m_inc). */
+        size_t num_valid = 0;
 
         size_t current_testing_x = 0;
         /**
@@ -468,7 +471,6 @@ void run_sieve_thread(void) {
         assert(sieve_data);
         const auto m_inc = config.m_inc;
 
-        vector<uint32_t> local_active_m_i;
         // Need to be able to write to composites[m_inc] as sentinel
         vector<uint8_t> composites((m_inc + 8) / 8 + 1, 0);
         uint64_t last_sieved = 0;
@@ -477,6 +479,7 @@ void run_sieve_thread(void) {
         uint64_t total_active = 0;
         uint64_t total_unknown = 0;
         double total_time = 0;
+        double finalize_time = 0;
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
@@ -507,7 +510,6 @@ void run_sieve_thread(void) {
             auto s_start_t = high_resolution_clock::now();
 
             assert(sieve_data->next_tests_m_i.size() == 0);
-            local_active_m_i = sieve_data->active_m_i;
             config = sieve_data->config;
             lock.unlock();
 
@@ -521,14 +523,14 @@ void run_sieve_thread(void) {
 
             std::fill(composites.begin(), composites.end(), 0);
             assert (config.d % 2 == 0);
-            uint64_t m_0 = m_start + local_active_m_i.front();
-            assert (m_0 % 2 == 1);
-            // verify K (odd) + X is not divisibly by 2
-            assert ( X % 2 == 0 );
 
             // Handle evens, maybe isn't needed?
-            for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
-                composites[m_i >> 3] |= 1 << (m_i & 7);
+            // TODO make sure always index zero.
+            //for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
+            //    composites[m_i >> 3] |= 1 << (m_i & 7);
+            //}
+            for(uint32_t m_i = 0; m_i < m_inc; m_i += 8) {
+                composites[m_i >> 3] |= 0b1010101;
             }
 
             for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
@@ -543,14 +545,14 @@ void run_sieve_thread(void) {
 
                 if (prime < m_inc) {
                     // This requires K odd (checked above).
-                    if (((X ^ mi_0) & 1) == M_parity_check)
-                        mi_0 += prime;
+                    //if (((X ^ mi_0) & 1) == M_parity_check)
+                    //    mi_0 += prime;
+                    mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
 
                     uint32_t shift = 2*prime;
                     for (uint64_t t = mi_0; t < m_inc; t += shift) {
                         composites[t >> 3] |= 1 << (t & 7);
                     }
-
                 } else {
                     //  make this branchless, safe to write to composites[m_inc]
                     uint64_t index = mi_0 < m_inc ? mi_0 : m_inc;
@@ -582,57 +584,60 @@ void run_sieve_thread(void) {
             }
 #endif // defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
 
-            // "most" (90%+) should be composite, so this should be ~10%
-            vector<uint32_t> unknowns_i;
-            unknowns_i.reserve(local_active_m_i.size() / 10);
-            for (auto m_i : local_active_m_i) {
-#ifdef GPU_SIEVE
-                if (!test[m_i]) {
-#else
-                if (!(composites[m_i >> 3] & 1 << (m_i & 7))) {
-#endif // GPU_SIEVE
-                    unknowns_i.push_back(m_i);
+            auto s_stop_t = high_resolution_clock::now();
+            double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();
+            total_runs += 1;
+            total_time += sieve_duration_t;
 
-                    if (0) {
-                        for( const auto& [prime, base_r] : p_and_r) {
-                            uint64_t m = m_start + m_i;
-                            if ((m * base_r + X) % prime == 0) {
-                                printf("Composite issue: %lu * K + %u mod %u == 0",
-                                       m, X, prime);
-                            }
-                        }
-                    }
+            lock.lock();
+
+            double finalize_duration_t;
+            uint32_t active_size = sieve_data->active_m_i.size();
+            uint32_t unknowns_size;
+            { // Finalize
+                auto s_start_t = high_resolution_clock::now();
+                // "most" (90%+) should be composite, so this should be ~10%
+                vector<uint32_t> unknowns_i;
+                unknowns_i.reserve(sieve_data->active_m_i.size() / 10);
+                for (auto m_i : sieve_data->active_m_i) {
+#ifdef GPU_SIEVE
+                    if (!test[m_i])
+                    //if (!(test[m_i >> 3] & 1 << (m_i & 7)))
+#else
+                    if (!(composites[m_i >> 3] & 1 << (m_i & 7)))
+#endif // GPU_SIEVE
+                        unknowns_i.push_back(m_i);
+                }
+                unknowns_size = unknowns_i.size();
+                assert(sieve_data->active_m_i.size() < 400 || !unknowns_i.empty());
+                total_active += active_size;
+                total_unknown += unknowns_size;
+
+                auto s_stop_t = high_resolution_clock::now();
+                finalize_duration_t = duration<double>(s_stop_t - s_start_t).count();
+                finalize_time += finalize_duration_t;
+                total_time += finalize_duration_t;
+
+                // Finalize range
+                last_sieved = X;
+                sieve_data->next_tests_m_i.swap(unknowns_i);
+                if (state == SieveData::State::FIRST_SIEVE) {
+                    // Mark as active after next_tests_m_i are set
+                    sieve_data->state = SieveData::State::ACTIVE;
                 }
             }
-            assert(local_active_m_i.size() < 400 || !unknowns_i.empty());
-            total_active += local_active_m_i.size();
-            total_unknown += unknowns_i.size();
-
-            auto s_stop_t = high_resolution_clock::now();
-            double duration_t = duration<double>(s_stop_t - s_start_t).count();
-            total_runs += 1;
-            total_time += duration_t;
+            lock.unlock();
 
             if ((config.verbose
                         + (X <= 2)
                         + (config.m_start <= 1'000'000)) >= 3) {
                 auto M_end = m_start + m_inc;
-                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %ld/%ld unknown/active took %.2f seconds \n",
+                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active took %.ff + %.3f seconds \n",
                        m_start / 1'000'000, M_end / 1'000'000,
-                       X, unknowns_i.size(), local_active_m_i.size(),
-                       duration_t);
+                       X, unknowns_size, active_size,
+                       sieve_duration_t, finalize_duration_t);
             }
 
-            lock.lock();
-
-            // Finalize range
-            last_sieved = X;
-            sieve_data->next_tests_m_i = unknowns_i;
-            if (state == SieveData::State::FIRST_SIEVE) {
-                // Mark as active after next_tests_m_i are set
-                sieve_data->state = SieveData::State::ACTIVE;
-            }
-            lock.unlock();
         }
 
         mpz_clear(K);
@@ -642,8 +647,11 @@ void run_sieve_thread(void) {
             printf("SIEVE Timings:\n");
             printf("\ttotal_m: %lu (%u/second) %.1f seconds\n",
                     total_m, (uint32_t) (total_m / total_s), total_s);
-            printf("\tsieves: %lu, total_time: %.1f seconds (%.3f/sieve)\n",
-                    total_runs, total_time, total_time / total_runs);
+            printf("\tsieves: %lu\n", total_runs);
+            printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
+                    100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
+            printf("\ttotal_time: %.1f seconds (%.3f/sieve)\n",
+                    total_time, total_time / total_runs);
             printf("\ttotal_active: %lu, total_unknown: %lu (%.1f%%)\n",
                     total_active, total_unknown, 100.0 * total_unknown / total_active);
             printf("\tactive / run: %lu, unknown / run: %lu\n",
@@ -850,10 +858,11 @@ void setup_sieve_data() {
             sieve_data->active_m_i.push_back(m_i);
         }
     }
+    sieve_data->num_valid = sieve_data->active_m_i.size();
     if (config.verbose + (config.m_start <= 1) >= 2)
         printf("\nSetup, starting at X=%lu with %ld/%ld active_m\n",
                 sieve_data->current_sieve_x,
-                sieve_data->active_m_i.size(), config.m_inc);
+                sieve_data->num_valid, config.m_inc);
 
     sieve_data->state = SieveData::State::FIRST_SIEVE;
 }
@@ -931,7 +940,7 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
         overflowed.push_back({m_start + m_i, min_X});
     }
     stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
-    stats.s_tests += m_inc;
+    stats.s_tests += sieve_data->num_valid;
     stats.possibly_print_stats("GPU", config);
 
     sieve_data->config.m_start += m_inc;

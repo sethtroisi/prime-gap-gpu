@@ -51,7 +51,7 @@ using namespace std::chrono;
 
 // BIT_IS_BIT means 8x less GPU memory, faster transfers but, slightly slower compute
 // A very small percentage of factors get lost.
-// #define BIT_IS_BIT
+//#define BIT_IS_BIT
 
 // support routines
 void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
@@ -297,7 +297,8 @@ int32_t invert(int32_t a, int32_t p) {
 
 GPUSieve::GPUSieve(const struct Config& config) {
     // ----- Sieve stats & Merit Stuff
-    const double K_log = prob_prime_and_stats(config, K);
+    init_K(config, K);
+    const double K_log = _log(K);
     const double N_log = K_log + log(config.m_start);
     const double prob_prime = 1 / N_log - 1 / (N_log * N_log);
 
@@ -379,12 +380,16 @@ GPUSieve::GPUSieve(const struct Config& config) {
         cudaStreamSynchronize(runner);
         auto T1 = high_resolution_clock::now();
         auto gpu_setup_ms = duration_cast<milliseconds>(T1 - T0).count();
-        printf("GPU<<<%d,%d>>> setup: %lu ms\n", GRID_SIZE, BLOCK_SIZE, gpu_setup_ms);
+        printf("\tGPU<<<%d,%d>>> setup: %lu ms\n", GRID_SIZE, BLOCK_SIZE, gpu_setup_ms);
     }
 }
 
 GPUSieve::~GPUSieve() {
-    printf("\t~GPUSieve\n");
+    printf("~GPUSieve\n");
+    printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
+            total_sieve_time, number_sieves, 1000 * total_sieve_time / number_sieves);
+    printf("\n");
+
     CUDA_CHECK(cudaFreeHost(host_thread_stats));
     CUDA_CHECK(cudaFree(thread_stats));
 
@@ -402,11 +407,12 @@ GPUSieve::~GPUSieve() {
 }
 
 uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X) {
+    uint32_t kernel1_ms, kernel2_ms, kernel_ms;
     { // Run GPU Sieve!
         auto T0 = high_resolution_clock::now();
         CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
-        num_small_primes = 200;
+        num_small_primes = 20;
         // TODO print out n'th prime or something.
 
         method2_small_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
@@ -419,7 +425,6 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
         );
 
         cudaStreamSynchronize(runner);
-
         auto T1 = high_resolution_clock::now();
 
         method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
@@ -432,14 +437,13 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
         );
 
         cudaStreamSynchronize(runner);
+        auto T2 = high_resolution_clock::now();
 
-        if (verbose >= 2) {
-            auto T2 = high_resolution_clock::now();
-            auto kernel1_ms = duration_cast<milliseconds>(T1 - T0).count();
-            auto kernel2_ms = duration_cast<milliseconds>(T2 - T1).count();
-            auto kernel_ms = duration_cast<milliseconds>(T2 - T0).count();
-            printf("GPU sieve %lu = %lu + %lu ms\n", kernel_ms, kernel1_ms, kernel2_ms);
-        }
+        kernel1_ms = duration_cast<milliseconds>(T1 - T0).count();
+        kernel2_ms = duration_cast<milliseconds>(T2 - T1).count();
+        kernel_ms = duration_cast<milliseconds>(T2 - T0).count();
+        number_sieves += 1;
+        total_sieve_time += duration<double>(T2 - T0).count();
     }
 
     if (0) { // Read thread stats
@@ -476,13 +480,13 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
         assert( mpz_odd_p(K) );
         for (uint32_t mi = ((X + m_start) % 2); mi < m_inc; mi += 2) {
 #ifdef BIT_IS_BIT
-            host_composite[mi >> 3] = 1 << (mi & 7);
+            host_composite[mi >> 3] |= 1 << (mi & 7);
 #else
             host_composite[mi] = 1;
 #endif  // BIT_IS_BIT
         }
 
-        if (verbose >= 3) {
+        if (verbose >= 2) {
 #ifdef BIT_IS_BIT
             uint32_t num_composite = 0;
             for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
@@ -494,7 +498,10 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
 
             auto T1 = high_resolution_clock::now();
             auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
-            printf("\tGPU copy-back: %lu ms | %u/%lu composite\n", bitfiddling_ms, num_composite, m_inc);
+            printf("\tGPU sieve %lu ms | kernels: %u + %u ms "
+                    "| copy-back: %lu ms | %u/%lu composite\n",
+                    kernel_ms + bitfiddling_ms, kernel1_ms, kernel2_ms,
+                    bitfiddling_ms, num_composite, m_inc);
         }
     }
 

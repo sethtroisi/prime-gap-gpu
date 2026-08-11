@@ -23,8 +23,8 @@
 #include "gap_common.h"
 
 // TODO figure out what to set here
-#define GRID_SIZE 32
-#define BLOCK_SIZE 32
+#define GRID_SIZE 64
+#define BLOCK_SIZE 32 // Number of threads
 
 using std::vector;
 
@@ -42,7 +42,10 @@ class GPUSieve {
     private:
         cudaStream_t runner;
 
-        // TODO consider moving to GPUCached and change the names
+        uint32_t verbose = 0;
+        uint64_t number_sieves = 0;
+        double   total_sieve_time = 0;
+
         /**** GPU POINTERS ****/
         // GPU stats
         const size_t   stats_per_thread = 4;
@@ -72,6 +75,4 @@ class GPUSieve {
 
         mpz_t K;
         //uint32_t K_mod2310;
-
-        uint32_t verbose = 0;
 };
