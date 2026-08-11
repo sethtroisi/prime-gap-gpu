@@ -40,6 +40,7 @@ class StatsCounters {
 
         /* PRP counter */
         uint64_t    s_total_prp_tests = 0;
+        uint64_t    s_total_primes = 0;
 
         /* Number of times fallback or skips happened */
         uint64_t    s_skips_after_one_side = 0;
