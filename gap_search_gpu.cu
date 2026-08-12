@@ -235,7 +235,7 @@ class SieveData {
         /** sieve_mtx must be held while calling */
         void increment_X();
 
-        void add_found_prime_m_i(vector<uint32_t> m_i);
+        void add_found_prime_m_i(const vector<uint32_t>& m_i);
 };
 
 
@@ -311,7 +311,7 @@ void remove_vector(vector<uint32_t> &A, const vector<uint8_t> &B) {
     A.resize(i);
 }
 
-void SieveData::add_found_prime_m_i(vector<uint32_t> m_i) {
+void SieveData::add_found_prime_m_i(const vector<uint32_t> &m_i) {
     for (auto i : m_i) {
         assert(i < config.m_inc);
         found_prime_m_i[i >> 3] |= 1 << (i & 7);
@@ -658,7 +658,7 @@ void run_sieve_thread(void) {
                 //uint64_t m_0 = (-X * inv_K) % prime;
 
                 uint64_t m_start_shift = m_start % prime;
-                m_start_shift = prime - m_start_shift + prime * (m_start_shift == prime);
+                m_start_shift = prime - m_start_shift;
                 uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
                 if (prime < m_inc) {
@@ -714,8 +714,7 @@ void run_sieve_thread(void) {
             { // Finalize
                 auto s_start_t = high_resolution_clock::now();
                 // "most" (90%+) should be composite, so this should be < 12.5%
-                vector<uint32_t> unknowns_i;
-                unknowns_i.reserve(sieve_data->active_m_i.size() / 8);
+                assert( sieve_data->next_tests_m_i.size() == 0 );
                 for (auto m_i : sieve_data->active_m_i) {
                     assert(m_i < m_inc);
 #ifdef GPU_SIEVE
@@ -724,10 +723,10 @@ void run_sieve_thread(void) {
 #else
                     if (!(composites[m_i >> 3] & 1 << (m_i & 7)))
 #endif // GPU_SIEVE
-                        unknowns_i.push_back(m_i);
+                        sieve_data->next_tests_m_i.push_back(m_i);
                 }
-                unknowns_size = unknowns_i.size();
-                assert(sieve_data->active_m_i.size() < 1'000 || !unknowns_i.empty());
+                unknowns_size = sieve_data->next_tests_m_i.size();
+                assert( sieve_data->active_m_i.size() < 1'000 || unknowns_size > 0 );
                 total_active += active_size;
                 total_unknown += unknowns_size;
 
@@ -738,7 +737,6 @@ void run_sieve_thread(void) {
 
                 // Finalize range
                 last_sieved = X;
-                sieve_data->next_tests_m_i.swap(unknowns_i);
                 if (state == SieveData::State::FIRST_SIEVE) {
                     // Mark as active after next_tests_m_i are set
                     sieve_data->state = SieveData::State::ACTIVE;
@@ -1311,15 +1309,20 @@ void run_testing_thread(const struct Config og_config) {
 }
 
 
+int ctrl_c_count = 0;
 void signal_callback_handler(int) {
+    ctrl_c_count++;
     if (stop_queue == 0) {
        cout << endl;
        cout << "Caught CTRL+C stopping, winding down work." << endl;
        cout << endl;
        stop_queue = 1;
+    } else if (ctrl_c_count == 2) {
+       cout << endl;
+       cout << "Caught 2nd CTRL+C, press one more time to fast exit." << endl;
     } else {
        cout << endl;
-       cout << "Caught 2nd CTRL+C, exit(2) now." << endl;
+       cout << "Caught 3nd CTRL+C, exit(2) now." << endl;
        cout << endl;
        is_running = false;
        exit(2);

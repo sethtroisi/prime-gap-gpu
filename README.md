@@ -40,43 +40,32 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 ```
 
 ```
-time ./gap_search_gpu -p 337 -d 2310 --mstart 29100000000 --minc 8000000 --max-prime 32 --min-merit 26 --cpu-fraction 0.011 --cpu-threads 7
+time ./gap_search_gpu -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 36 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
 
 GPU Timings:
-	waits on no active_m(10ms) : 4179
-	waits on no next_tests(2ms): 2968610
-	filling batches: 767.0 seconds (4.4%)
-	waiting filled : 60.4 seconds (0.3%)
-	running on gpu : 19891.1 seconds (113.8%)
-	waiting done   : 220.4 seconds (1.3%)
-	results        : 696.1 seconds (4.0%)
-	Batch fill %   : 96.3% (% fill), 7.5% (% partial batch)
+	m processed    : 33,246,754 (169,525/sec)
+	total tests    : 355,364,613 (9.2% prime) (1,812,012/sec)
+	waits on no active_m(10ms) : 88
+	waits on no next_tests(2ms): 11214
+	filling batches: 11.0 seconds (5.6%)
+	waiting filled : 0.8 seconds (0.4%)
+	running on gpu : 314.9 seconds (160.6%)
+	waiting done   : 4.3 seconds (2.2%)
+	results        : 7.9 seconds (4.0%)
+	batch fill %   : 99.3% (% fill), 1.5% (% partial batch)
 
 
 SIEVE Timings:
-	total_m: 9944000000 (569117/second) 17472.7 seconds
-	sieves: 420964
-	finalize_time(2.5%): 286.8 seconds (0.001/sieve)
-	total_time: 11563.1 seconds (0.027/sieve)
-	total_active: 138842455702, total_unknown: 22596117891 (16.3%)
-	active / run: 329820, unknown / run: 53677
-
-	Finalizing(stage 2): 16089 open, 22210000 processed
-	Finalizing(stage 2): 11089 open, 22215000 processed
-	Finalizing(stage 2): 6089 open, 22220000 processed
-	Finalizing(stage 2): 1089 open, 22225000 processed
-
-CPU OVERFLOW Timing:
-	total tested: 22226089
-	next prime only: 3761386, both sides: 18464699
-	> 26.0 merit: 80 (24 = 30.0% bad next_prime)
+	total_m: 200,000,000 (1,021,700/second) 195.8 seconds
+	sieves: 1308
+	finalize_time(6.6%): 4.8 seconds (0.004/sieve)
+	total_time: 73.2 seconds (0.056/sieve)
+	total_active: 2,238,382,250, total_unknown: 362,048,860 (16.2%)
+	active / run: 1,711,301, unknown / run: 276,795
 ```
 
 ## TODO
 
- * [ ] `save_partial_at_exit` save offset (and what merit this represents) + currently active M.
-   * Just make double exit a triple exit and add a comment to README
- * [ ] Might have missed '927598685 * 337# / 210 - 4538'?
  * [ ] Understand what sieve limit gmp is using for overflow
     * Maybe do sieving (in both directions myself)
     * Ugh this would be a lot of work.
