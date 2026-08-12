@@ -662,12 +662,8 @@ void run_sieve_thread(void) {
                 uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
                 if (prime < m_inc) {
-                    // This requires K odd (checked above).
-                    //const uint32_t M_parity_check = m_start & 1;
-                    //if (((X ^ mi_0) & 1) == M_parity_check)
-                    //    mi_0 += prime;
-                    // mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
-                    // This requires M is always even (checked above).
+                    // This requires K odd and m_start even (both checked above)
+                    // See 1ba32111 for more details.
                     mi_0 += (mi_0 & 1) ? 0 : prime;
 
                     uint32_t shift = 2*prime;
