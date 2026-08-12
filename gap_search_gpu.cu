@@ -320,8 +320,8 @@ void SieveData::add_found_prime_m_i(vector<uint32_t> m_i) {
 
 /** sieve_mtx must be held while calling */
 void SieveData::increment_X() {
-    // TODO verify test_i > active_m_i
     // TODO verify no outstanding prime tests
+    assert(test_i == unknown_m_i.size());
 
     // asserting next sieve is already done.
     assert(current_sieve_x > current_testing_x);
@@ -399,6 +399,9 @@ class GPUBatch {
         vector<uint8_t>  active;
         // Result from GPU
         vector<int>  result;
+
+        // temp vector to briefly hold primes
+        vector<uint32_t> temp_prime_m_i;
 
         // For signaling, must be owned to change state.
         std::mutex mutex;
@@ -575,6 +578,8 @@ void run_sieve_thread(void) {
 #endif // GPU_SIEVE
 
         assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
+        assert ( config.m_start % 2 == 0); // always start on even
+        assert ( config.m_inc % 2 == 0); // all future m_start are even
 
         assert(sieve_data);
         const auto m_inc = config.m_inc;
@@ -627,7 +632,6 @@ void run_sieve_thread(void) {
             uint8_t *test = gpu_sieve.run(m_start, m_inc, X);
 #endif // GPU_SIEVE
 #if !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
-            const uint32_t M_parity_check = m_start & 1;
 
             std::fill(composites.begin(), composites.end(), 0);
             assert (config.d % 2 == 0);
@@ -645,6 +649,8 @@ void run_sieve_thread(void) {
             // TODO handle small primes wheel the length of d?
             // Has the right feel that it could work.
 
+            assert(X % 2 == 0); // TODO explain why
+
             for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
                 // if ((m * K + X) % p == 0) {
                 // if ((m * K) % p == -X) {
@@ -657,9 +663,12 @@ void run_sieve_thread(void) {
 
                 if (prime < m_inc) {
                     // This requires K odd (checked above).
+                    //const uint32_t M_parity_check = m_start & 1;
                     //if (((X ^ mi_0) & 1) == M_parity_check)
                     //    mi_0 += prime;
-                    mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
+                    // mi_0 += (((X ^ mi_0) & 1) == M_parity_check) ? prime : 0;
+                    // This requires M is always even (checked above).
+                    mi_0 += (mi_0 & 1) ? 0 : prime;
 
                     uint32_t shift = 2*prime;
                     for (uint64_t t = mi_0; t < m_inc; t += shift) {
@@ -957,8 +966,7 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
 
 /** sieve_mtx must be held while calling */
 uint32_t process_finished_batch(GPUBatch& batch) {
-    // TODO hold a temp vector to avoid allocs.
-    vector<uint32_t> prime_m_i;
+    batch.temp_prime_m_i.clear();
     for (size_t i = 0; i < GPU_BATCH_SIZE; i++) {
         if (!batch.active[i]) {
             continue;
@@ -968,11 +976,11 @@ uint32_t process_finished_batch(GPUBatch& batch) {
 
         if (batch.result[i]) {
             // Found prime!
-            prime_m_i.push_back(batch.m_i[i]);
+            batch.temp_prime_m_i.push_back(batch.m_i[i]);
         }
     }
-    sieve_data->add_found_prime_m_i(prime_m_i);
-    return prime_m_i.size();
+    sieve_data->add_found_prime_m_i(batch.temp_prime_m_i);
+    return batch.temp_prime_m_i.size();
 }
 
 /** sieve_mtx must be held while calling */
