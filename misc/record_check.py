@@ -114,7 +114,7 @@ def print_record_gaps(args, gaps):
         small_merit = 0
         own_records = []
         record_lines = []
-        improvements = defaultdict(float)
+        improvements = {}
         for gap in gaps:
             # gapsize, merit, raw_data, startprime, "line"
             size = gap[0]
@@ -167,20 +167,20 @@ def print_record_gaps(args, gaps):
                 else:
                     improvement = new_merit - existing[0] + 6e-3
 
-            if improvement >= 0:
+            if improvement >= 0 and improvement > improvements.get(size, [0])[0]:
                 # if not is_same and improvement < 6e-3:
                 #    print("Close:", existing[2], "vs newer", startprime)
 
-                if is_same and is_own_record:
+                improvements[size] = (improvement, existing)
+                record_lines.append(raw_data)
+
+                if is_own_record:
                     own_records.append(raw_data)
                     ith = len(own_records)
-                    print(f"\tReplacing a personal record | {raw_data}\n\t{' '*30} | {existing}")
+                    print(f"\tReplacing a personal record | {raw_data}\n\t{' '*27} | {existing[2]}")
                     special = ith in (1, 2, 5, 10, 20, 50) or ith % 100 == 0
                     if not special:
                         continue
-                else:
-                    improvements[gap[0]] = max(improvements[gap[0]], improvement)
-                    record_lines.append(raw_data)
 
                 #print("\tRecord {:5} | {:70s} | Gap={:<6} (old: {:.2f}{} +{:.2f})".format(
                 #    str(len(own_records)) + "*" if is_same else len(record_lines), gap[4], size,
@@ -206,12 +206,20 @@ def print_record_gaps(args, gaps):
                 len(record_lines), len(seen),
                 f"({len(own_records)} already submitted)" if own_records else ""))
             if improvements:
+                # I'd like these sorted by gap
+                records = list(improvements.items())
+                if args.sort:
+                    records.sort()
+                for k, (plus, old) in records:
+                    print("\t", f"{k:5} +{plus:.2f} improves {old[2]} by {old[3]}")
                 print("Merit  : +{:.2f} total, +{:.2f} for {}".format(
-                    sum(improvements.values()), *max((v, k) for k, v in improvements.items())))
+                    sum(v[0] for v in improvements.values()),
+                    *max((v[0], k) for k, v in improvements.items())))
             print("Smallst:", min(record_lines, key=record_line_sort))
             print("Largest:", max(record_lines, key=record_line_sort))
             if small_merit:
                 print(f'\tHid {small_merit} new "records" with merit < {args.ignore_small}')
+
             print()
 
 
