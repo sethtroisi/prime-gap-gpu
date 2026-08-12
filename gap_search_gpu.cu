@@ -283,19 +283,15 @@ void SieveData::setup_sieve_data(bool stop) {
     found_prime_m_i.clear();
     next_tests_m_i.clear();
 
-    found_prime_m_i.resize((config.m_inc + 7) / 8 + 1, 0);
+    // Need to be able to write to config.minc >> 3
+    found_prime_m_i.resize(config.m_inc / 8 + 2, 0);
 
     if (stop)
         return;
 
-    // TODO use is_coprime_and_valid_m
-    for (uint64_t m_i = 0; m_i < config.m_inc; m_i++) {
-        uint64_t m = config.m_start + m_i;
-        // Check if divisibly by any factor of D
-        if (gcd(m, config.d) == 1) {
-            active_m_i.push_back(m_i);
-        }
-    }
+    auto temp = is_coprime_and_valid_m(config);
+    active_m_i.swap(temp.second);
+
     num_valid = active_m_i.size();
     if (config.verbose + (config.m_start <= 1) >= 2)
         printf("\nSetup, starting at X=%lu with %ld/%ld active_m\n",
@@ -317,6 +313,7 @@ void remove_vector(vector<uint32_t> &A, const vector<uint8_t> &B) {
 
 void SieveData::add_found_prime_m_i(vector<uint32_t> m_i) {
     for (auto i : m_i) {
+        assert(i < config.m_inc);
         found_prime_m_i[i >> 3] |= 1 << (i & 7);
     }
 }
@@ -583,7 +580,7 @@ void run_sieve_thread(void) {
         const auto m_inc = config.m_inc;
 
         // Need to be able to write to composites[m_inc] as sentinel
-        vector<uint8_t> composites((m_inc + 8) / 8 + 1, 0);
+        vector<uint8_t> composites(m_inc / 8 + 2, 0);
         uint64_t last_sieved = 0;
         uint64_t total_m = m_inc;
         uint64_t total_runs = 0;
@@ -640,6 +637,7 @@ void run_sieve_thread(void) {
             //for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
             //    composites[m_i >> 3] |= 1 << (m_i & 7);
             //}
+            assert(m_start % 2 == 0); // or fix the code
             for(uint32_t m_i = 0; m_i < m_inc; m_i += 8) {
                 composites[m_i >> 3] |= 0b1010101;
             }
@@ -710,10 +708,11 @@ void run_sieve_thread(void) {
             uint32_t unknowns_size;
             { // Finalize
                 auto s_start_t = high_resolution_clock::now();
-                // "most" (90%+) should be composite, so this should be ~10%
+                // "most" (90%+) should be composite, so this should be < 12.5%
                 vector<uint32_t> unknowns_i;
-                unknowns_i.reserve(sieve_data->active_m_i.size() / 10);
+                unknowns_i.reserve(sieve_data->active_m_i.size() / 8);
                 for (auto m_i : sieve_data->active_m_i) {
+                    assert(m_i < m_inc);
 #ifdef GPU_SIEVE
                     if (!test[m_i])
                     //if (!(test[m_i >> 3] & 1 << (m_i & 7)))
@@ -723,7 +722,7 @@ void run_sieve_thread(void) {
                         unknowns_i.push_back(m_i);
                 }
                 unknowns_size = unknowns_i.size();
-                assert(sieve_data->active_m_i.size() < 400 || !unknowns_i.empty());
+                assert(sieve_data->active_m_i.size() < 1'000 || !unknowns_i.empty());
                 total_active += active_size;
                 total_unknown += unknowns_size;
 
@@ -1258,25 +1257,27 @@ void run_testing_thread(const struct Config og_config) {
         }
 
         if (og_config.verbose >= 1) {
-            double total = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
+            double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
             setlocale(LC_NUMERIC, "");
             printf("\nGPU Timings:\n");
             printf("\tm processed    : %'lu (%'u/sec)\n",
-                    stats.s_tests, (uint32_t) (stats.s_tests / total));
-            printf("\ttotal tests    : %'lu (%.1f%% prime)\n",
-                    stats.s_total_prp_tests, 100.0 * stats.s_total_primes / stats.s_total_prp_tests);
+                    stats.s_tests, (uint32_t) (stats.s_tests / total_t));
+            printf("\ttotal tests    : %'lu (%.1f%% prime) (%'u/sec)\n",
+                    stats.s_total_prp_tests,
+                    100.0 * stats.s_total_primes / stats.s_total_prp_tests,
+                    (uint32_t) (stats.s_total_prp_tests / total_t));
             printf("\twaits on no active_m(10ms) : %ld\n", gpu_stats.wait_not_active);
             printf("\twaits on no next_tests(2ms): %ld\n", gpu_stats.wait_no_next_tests);
             printf("\tfilling batches: %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total);
+                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
             printf("\twaiting filled : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_queued_full, 100 * gpu_stats.d_queued_full / total);
+                    gpu_stats.d_queued_full, 100 * gpu_stats.d_queued_full / total_t);
             printf("\trunning on gpu : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_run, 100 * gpu_stats.d_run / total);
+                    gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
             printf("\twaiting done   : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_queued_done, 100 * gpu_stats.d_queued_done / total);
+                    gpu_stats.d_queued_done, 100 * gpu_stats.d_queued_done / total_t);
             printf("\tresults        : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_results, 100 * gpu_stats.d_results / total);
+                    gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
             printf("\tbatch fill %%   : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
                     100.0 * stats.s_total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
                     100.0 * gpu_stats.batches_partial / gpu_stats.batches_run

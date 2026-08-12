@@ -16,11 +16,13 @@ OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gap_test_common.o
 OUT	= gap_search_gpu
 CC	= g++
-CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -fopenmp
+CFLAGS	= $(OPT) -Wall -Werror -Wno-vla
 NVCC	= nvcc
 ARCH    = sm_61
 CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
-		  -Xcompiler -Wall -Xcompiler -Werror -Xcompiler -fopenmp
+		  -Xcompiler -Wall \
+	          -Xcompiler -Werror \
+
 BITS    = 1024
 
 LDFLAGS	= -lgmp -lprimesieve
@@ -36,7 +38,7 @@ sieve_small.o: sieve_small.cu
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
-gap_search_gpu: gap_search_gpu.cu gap_common.o gap_test_common.o sieve_small.o
+gap_search_gpu: gap_search_gpu.cu gap_common.o gap_test_common.o #sieve_small.o
 	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
 		$(CUDA_FLAGS) \
 		-I../CGBN/include \

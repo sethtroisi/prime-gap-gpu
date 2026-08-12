@@ -52,17 +52,17 @@ void from_mpz(mpz_t s, uint32_t *x, uint32_t count) {
 }
 
 // support routines
-//void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
-//  // check for cuda errors
-//
-//  if(status!=cudaSuccess) {
-//    printf("CUDA error occurred: %s\n", cudaGetErrorString(status));
-//    if(action!=NULL)
-//      printf("While running %s   (file %s, line %d)\n", action, file, line);
-//    exit(1);
-//  }
-//}
-void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0);
+void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
+  // check for cuda errors
+
+  if(status!=cudaSuccess) {
+    printf("CUDA error occurred: %s\n", cudaGetErrorString(status));
+    if(action!=NULL)
+      printf("While running %s   (file %s, line %d)\n", action, file, line);
+    exit(1);
+  }
+}
+//void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0);
 #define CUDA_CHECK(action) cuda_check(action, #action, __FILE__, __LINE__)
 
 
