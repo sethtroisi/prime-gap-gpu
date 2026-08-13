@@ -44,7 +44,7 @@
 #include "gap_test_common.h"
 
 //#define GPU_SIEVE
-//#define GPU_SIEVE_VERIFY
+// GPU_SIEVE code is in 8ad9efb0
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -561,6 +561,7 @@ void run_sieve_thread(void) {
         struct Config config = sieve_data->config;
         init_K(config, K);
         std::vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
+        std::vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
         std::vector<uint32_t> d_primes;
         uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
         {
@@ -578,7 +579,11 @@ void run_sieve_thread(void) {
                 const int32_t inv_K = _invert(base_r, prime);
                 assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
                 assert( ((uint64_t) inv_K * base_r) % prime == 1 );
-                p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
+                if (config.m_inc / 13 > prime) {
+                    p_and_neg_inverse_k_small.emplace_back((uint32_t) prime, prime - inv_K);
+                } else {
+                    p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
+                }
             }
         }
 
@@ -592,9 +597,11 @@ void run_sieve_thread(void) {
 
         assert(sieve_data);
         const auto m_inc = config.m_inc;
+        const auto M_INC_HALF = m_inc / 2;
 
         // Need to be able to write to composites[m_inc] as sentinel
-        vector<uint8_t> composites(m_inc / 8 + 2, 0);
+        vector<uint8_t> composites(M_INC_HALF / 8 + 2, 0);
+        const uint64_t composites_safe_idx = 8 * (composites.size() - 1);
 
         uint64_t D = config.d;
         assert( 4 * D % 8 == 0);
@@ -634,21 +641,20 @@ void run_sieve_thread(void) {
                 continue;
             }
 
-            auto s_start_t = high_resolution_clock::now();
-            double wheel_duration_t;
-
             assert(sieve_data->next_tests_m_i.size() == 0);
             config = sieve_data->config;
             lock.unlock();
 
+            auto s_start_t = high_resolution_clock::now();
+            double wheel_duration_t;
             const auto m_start = config.m_start;
 
-#ifdef GPU_SIEVE
-            uint8_t *test = gpu_sieve.run(m_start, m_inc, X);
-#endif // GPU_SIEVE
-#if !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
-
             assert (D % 2 == 0);
+
+            // M must be coprime with D  ->  M must be Odd
+            // M_start -> even  ->  M_i = odd
+            // M(odd) * K(odd) + X  ->  X must be even
+            assert (X % 2 == 0);
 
             // Handle evens, maybe isn't needed?
             // TODO make sure always index zero.
@@ -656,11 +662,9 @@ void run_sieve_thread(void) {
             //    composites[m_i >> 3] |= 1 << (m_i & 7);
             //}
             assert(m_start % 2 == 0); // or fix the code
-            //std::fill(composites.begin(), composites.end(), 0);
-            //for(uint32_t m_i = 0; m_i < m_inc; m_i += 8) {
-            //    composites[m_i >> 3] = 0b1010101;
-            //}
-            std::fill(composites.begin(), composites.end(), 0b1010101);
+            // Used to mark of each even index by factor of 2, not needed because only odd indexes.
+            //std::fill(composites.begin(), composites.end(), 0b1010101);
+            std::fill(composites.begin(), composites.end(), 0);
 
             { // Handle all divisors of d at one time.
                 auto s_wheel_t = high_resolution_clock::now();
@@ -669,12 +673,13 @@ void run_sieve_thread(void) {
                 std::fill(d_wheel.begin(), d_wheel.end(), 0);
 
                 for (uint32_t d : d_primes) {
+                    if (d == 2) continue;
                     const uint64_t m_start_shift = m_start % d;
                     for (uint32_t m_i = 1; m_i < d_wheel.size(); m_i += 2) {
                         // check if d divides (m_start + m_i) * K + X
                         if (((m_start_shift + m_i) * K_mod_d + X) % d == 0) {
                             // mark all later multiples
-                            for( uint32_t i = m_i; i < 8*d_wheel.size(); i += 2*d ) {
+                            for( uint32_t i = m_i >> 1; i < 8*d_wheel.size(); i += d ) {
                                 d_wheel[i >> 3] |= 1 << (i & 7);
                             }
                             break;
@@ -682,7 +687,7 @@ void run_sieve_thread(void) {
                     }
                 }
 
-                // d_wheel = 4*config.d bits = multiple of d and 8.
+                // d_wheel = 8*config.d bits = multiple of d and 16, but 8 after removing half.
                 for(uint32_t c_i = 0; c_i < composites.size(); ) {
                     size_t copy = std::min(composites.size() - c_i, d_wheel.size());
                     for (uint32_t j = 0; j < copy; j ++) {
@@ -693,57 +698,90 @@ void run_sieve_thread(void) {
                 wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
             }
 
-            assert(X % 2 == 0); // TODO explain why
 
-            for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
-                // if ((m * K + X) % p == 0) {
-                // if ((m * K) % p == -X) {
-                // if ((m * K * inv_K) % p == -X * inv_K) {
-                //uint64_t m_0 = (-X * inv_K) % prime;
+            if (X * config.max_prime < m_start) {
+                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k_small) {
+                    uint64_t mi_0 = (m_start - X * neg_inv_K) % prime;
+                    mi_0 = (mi_0 == 0) ? 0 : prime - mi_0;
 
-                uint64_t m_start_shift = m_start % prime;
-                m_start_shift = prime - m_start_shift;
-                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
-
-                if (prime < m_inc) {
                     // This requires K odd and m_start even (both checked above)
                     // See 1ba32111 for more details.
                     mi_0 += (mi_0 & 1) ? 0 : prime;
+                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
-                    uint32_t shift = 2*prime;
-                    for (uint64_t t = mi_0; t < m_inc; t += shift) {
+                    uint32_t shift = prime;
+                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
                         composites[t >> 3] |= 1 << (t & 7);
                     }
-                } else {
-                    //  make this branchless, safe to write to composites[m_inc]
-                    uint64_t index = mi_0 < m_inc ? mi_0 : m_inc;
-                    composites[index >> 3] |= 1 << (index & 7);
+                }
+                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
+                    uint64_t mi_0 = (m_start - X * neg_inv_K) % prime;
+                    mi_0 = (mi_0 == 0) ? 0 : prime - mi_0;
+
+                    if (prime < M_INC_HALF) {
+                        // This requires K odd and m_start even (both checked above)
+                        // See 1ba32111 for more details.
+                        mi_0 += (mi_0 & 1) ? 0 : prime;
+                        mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+
+                        uint32_t shift = prime;
+                        for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                            composites[t >> 3] |= 1 << (t & 7);
+                        }
+                    } else {
+                        uint64_t index = mi_0 < M_INC_HALF ? mi_0 : composites_safe_idx;
+                        index >>= 1;
+                        composites[index >> 3] |= 1 << (index & 7);
+                    }
+                }
+            } else {
+                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k_small) {
+                    // if ((m * K + X) % p == 0) {
+                    // if ((m * K) % p == -X) {
+                    // if ((m * K * inv_K) % p == -X * inv_K) {
+                    //uint64_t m_0 = (-X * inv_K) % prime;
+
+                    uint64_t m_start_shift = m_start % prime;
+                    m_start_shift = prime - m_start_shift;
+                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+
+                    // This requires K odd and m_start even (both checked above)
+                    // See 1ba32111 for more details.
+                    mi_0 += (mi_0 & 1) ? 0 : prime;
+                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+
+                    uint32_t shift = prime;
+                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                        composites[t >> 3] |= 1 << (t & 7);
+                    }
                 }
 
-            }
-#endif // !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
+                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
+                    // if ((m * K + X) % p == 0) {
+                    // if ((m * K) % p == -X) {
+                    // if ((m * K * inv_K) % p == -X * inv_K) {
+                    //uint64_t m_0 = (-X * inv_K) % prime;
 
-#if defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
-            uint32_t num_composite = 0;
-            for (uint8_t c : composites) {
-                num_composite += __builtin_popcount(c);
-            }
+                    uint64_t m_start_shift = m_start % prime;
+                    m_start_shift = prime - m_start_shift;
+                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
-            uint32_t mismatches = 0;
-            for (uint32_t m_i = 0; m_i < m_inc; m_i++) {
-                uint8_t cpu_bit = (composites[m_i >> 3] & (1 << (m_i & 7))) > 0;
-                mismatches += test[m_i] != cpu_bit;
-                if (m_i + 200 > m_inc && test[m_i] != cpu_bit) {
-                    printf("Mismatch at m=%u\n X=%u | CPU: %u, GPU: %u\n",
-                            m_i, X, cpu_bit, test[m_i]);
+                    if (prime < M_INC_HALF) {
+                        // This requires K odd and m_start even (both checked above)
+                        // See 1ba32111 for more details.
+                        mi_0 += (mi_0 & 1) ? 0 : prime;
+
+                        uint32_t shift = prime;
+                        for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                            composites[t >> 3] |= 1 << (t & 7);
+                        }
+                    } else {
+                        uint64_t index = mi_0 < M_INC_HALF ? mi_0 : composites_safe_idx;
+                        index >>= 1;
+                        composites[index >> 3] |= 1 << (index & 7);
+                    }
                 }
             }
-            printf("GPU/CPU sieve mismatches: %u | CPU composites: %u\n", mismatches, num_composite);
-            if (mismatches) {
-                is_running = false;
-                exit(0);
-            }
-#endif // defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
 
             auto s_stop_t = high_resolution_clock::now();
             double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();
@@ -761,12 +799,9 @@ void run_sieve_thread(void) {
                 assert( sieve_data->next_tests_m_i.size() == 0 );
                 for (auto m_i : sieve_data->active_m_i) {
                     assert(m_i < m_inc);
-#ifdef GPU_SIEVE
-                    if (!test[m_i])
-                    //if (!(test[m_i >> 3] & 1 << (m_i & 7)))
-#else
-                    if (!(composites[m_i >> 3] & 1 << (m_i & 7)))
-#endif // GPU_SIEVE
+                    assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
+                    uint32_t t = m_i >> 1;
+                    if (!(composites[t >> 3] & 1 << (t & 7)))
                         sieve_data->next_tests_m_i.push_back(m_i);
                 }
                 unknowns_size = sieve_data->next_tests_m_i.size();
@@ -888,7 +923,7 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                             overflowed.size(), stats.tested.load());
                 }
 
-                if (stop_queue > 0 && stats.tested.load() % 5'000 == 0) {
+                if (stop_queue > 0 && stats.tested.load() % 10'000 == 0) {
                     printf("\tFinalizing(stage %d): %lu open, %lu processed\n",
                         stop_queue.load(), overflowed.size(), stats.tested.load());
                 }
@@ -1418,12 +1453,6 @@ void prime_gap_test(struct Config config) {
     printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
     printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
 #endif // GPU_TESTING
-#ifdef GPU_SIEVE
-    printf("SIEVING ON GPU\n");
-#endif
-#if defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
-    printf("VERIFYING GPU SIEVING ON CPU\N");
-#endif // defined(GPU_SIEVE) && defined(GPU_SIEVE_VERIFY)
 
     assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 || GPU_BATCH_SIZE == 4096 ||
             GPU_BATCH_SIZE == 8192 || GPU_BATCH_SIZE ==16384 || GPU_BATCH_SIZE ==32768 );

@@ -21,7 +21,7 @@ NVCC	= nvcc
 ARCH    = sm_61
 CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
 		  -Xcompiler -Wall \
-	          -Xcompiler -Werror \
+	          -Xcompiler -Werror
 
 BITS    = 1024
 

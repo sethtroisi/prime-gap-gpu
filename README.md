@@ -68,10 +68,10 @@ SIEVE Timings:
 
   * [ ] Faster sieving
     * AVX
-    * Handle small primes (e.g. divisors of d) with a wheel
 
 ## TODONE
 
+  * [x] Wheel for divisors of d.
   * [x] Check a small percent of next_primes are actually prime
   * [x] Understand what sieve limit gmp is using for overflow
     * GMP is sieving to ~4M -> 10% less efficient
