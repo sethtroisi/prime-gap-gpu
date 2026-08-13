@@ -77,7 +77,7 @@ const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
  * GPU_BATCHES the number of simultanious batches to create & queue.
  * GPU_BATCH_SIZE is 2^n | best is between 4K and 16K.
  */
-const size_t GPU_BATCHES = 2;
+const size_t GPU_BATCHES = 3;
 const size_t GPU_BATCH_SIZE = 4 * 1024;
 
 /********** BENCHMARKING ***********/
@@ -561,13 +561,18 @@ void run_sieve_thread(void) {
         struct Config config = sieve_data->config;
         init_K(config, K);
         std::vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
+        std::vector<uint32_t> d_primes;
+        uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
         {
             primesieve::iterator iter;
             uint64_t prime = iter.next_prime();
             assert (prime == 2);  // we skip 2 which is the oddest prime.
             for (prime = iter.next_prime(); prime < config.max_prime; prime = iter.next_prime()) {
-                if (prime <= config.p && config.d % prime > 0)
+                if (prime <= config.p) {
+                    if (config.d % prime == 0)
+                        d_primes.push_back(prime);
                     continue;
+                }
                 const uint32_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 < base_r && base_r < prime );
                 const int32_t inv_K = _invert(base_r, prime);
@@ -590,6 +595,11 @@ void run_sieve_thread(void) {
 
         // Need to be able to write to composites[m_inc] as sentinel
         vector<uint8_t> composites(m_inc / 8 + 2, 0);
+
+        uint64_t D = config.d;
+        assert( 4 * D % 8 == 0);
+        vector<uint8_t> d_wheel(4*D, 0);
+        vector<uint32_t> d_indexes;
         uint64_t last_sieved = 0;
         uint64_t total_m = m_inc;
         uint64_t total_runs = 0;
@@ -625,6 +635,7 @@ void run_sieve_thread(void) {
             }
 
             auto s_start_t = high_resolution_clock::now();
+            double wheel_duration_t;
 
             assert(sieve_data->next_tests_m_i.size() == 0);
             config = sieve_data->config;
@@ -637,8 +648,7 @@ void run_sieve_thread(void) {
 #endif // GPU_SIEVE
 #if !defined(GPU_SIEVE) || !defined(GPU_SIEVE_VERIFY)
 
-            std::fill(composites.begin(), composites.end(), 0);
-            assert (config.d % 2 == 0);
+            assert (D % 2 == 0);
 
             // Handle evens, maybe isn't needed?
             // TODO make sure always index zero.
@@ -646,12 +656,42 @@ void run_sieve_thread(void) {
             //    composites[m_i >> 3] |= 1 << (m_i & 7);
             //}
             assert(m_start % 2 == 0); // or fix the code
-            for(uint32_t m_i = 0; m_i < m_inc; m_i += 8) {
-                composites[m_i >> 3] |= 0b1010101;
-            }
+            //std::fill(composites.begin(), composites.end(), 0);
+            //for(uint32_t m_i = 0; m_i < m_inc; m_i += 8) {
+            //    composites[m_i >> 3] = 0b1010101;
+            //}
+            std::fill(composites.begin(), composites.end(), 0b1010101);
 
-            // TODO handle small primes wheel the length of d?
-            // Has the right feel that it could work.
+            { // Handle all divisors of d at one time.
+                auto s_wheel_t = high_resolution_clock::now();
+                assert(D < config.m_inc / 100); // Do something different if not true.
+
+                std::fill(d_wheel.begin(), d_wheel.end(), 0);
+
+                for (uint32_t d : d_primes) {
+                    const uint64_t m_start_shift = m_start % d;
+                    for (uint32_t m_i = 1; m_i < d_wheel.size(); m_i += 2) {
+                        // check if d divides (m_start + m_i) * K + X
+                        if (((m_start_shift + m_i) * K_mod_d + X) % d == 0) {
+                            // mark all later multiples
+                            for( uint32_t i = m_i; i < 8*d_wheel.size(); i += 2*d ) {
+                                d_wheel[i >> 3] |= 1 << (i & 7);
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // d_wheel = 4*config.d bits = multiple of d and 8.
+                for(uint32_t c_i = 0; c_i < composites.size(); ) {
+                    size_t copy = std::min(composites.size() - c_i, d_wheel.size());
+                    for (uint32_t j = 0; j < copy; j ++) {
+                        composites[c_i + j] |= d_wheel[j];
+                    }
+                    c_i += copy;
+                }
+                wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
+            }
 
             assert(X % 2 == 0); // TODO explain why
 
@@ -752,10 +792,11 @@ void run_sieve_thread(void) {
                         + (X <= 2)
                         + (config.m_start <= 1'000'000)) >= 3) {
                 auto M_end = m_start + m_inc;
-                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active took %.3f + %.3f seconds \n",
+                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active "
+                       "took %.3f (wheel: %.3f) + %.3f seconds\n",
                        m_start / 1'000'000, M_end / 1'000'000,
                        X, unknowns_size, active_size,
-                       sieve_duration_t, finalize_duration_t);
+                       sieve_duration_t, wheel_duration_t, finalize_duration_t);
             }
 
         }
@@ -773,7 +814,7 @@ void run_sieve_thread(void) {
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
             printf("\ttotal_time: %.1f seconds (%.3f/sieve)\n",
                     total_time, total_time / total_runs);
-            printf("\ttotal_active: %'lu, total_unknown: %'lu (%.1f%%)\n",
+            printf("\ttotal_active: %'lu, total_unknown: %'lu (%.2f%%)\n",
                     total_active, total_unknown, 100.0 * total_unknown / total_active);
             printf("\tactive / run: %'lu, unknown / run: %'lu\n",
                     total_active / total_runs, total_unknown / total_runs);
@@ -866,9 +907,6 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                                 m_and_x.first, config.p, config.d, m_and_x.second);
                         printf("\n\n");
                         exit(1);
-                    } else {
-                        if (stats.spot_checked % 1000 == 1)
-                            printf("\t%lu'th spot checked passed!\n", stats.spot_checked.load());
                     }
                     continue;
                 }
@@ -1137,7 +1175,7 @@ void run_testing_thread(const struct Config og_config) {
         std::array<GPUBatch, GPU_BATCHES> gpu_batches = {
             GPUBatch(GPU_BATCH_SIZE),
             GPUBatch(GPU_BATCH_SIZE),
-            //GPUBatch(GPU_BATCH_SIZE),
+            GPUBatch(GPU_BATCH_SIZE),
         };
 
         std::thread gpu_threads[GPU_BATCHES];
@@ -1167,7 +1205,7 @@ void run_testing_thread(const struct Config og_config) {
                 const auto state = sieve_data->state;
                 if ((state != SieveData::State::ACTIVE) && (state != SieveData::State::FINAL)) {
                     lock.unlock();
-                    usleep(10'000); // 10ms
+                    usleep(5'000); // 10ms
                     gpu_stats.wait_not_active++;
                     continue;
                 }
@@ -1176,7 +1214,7 @@ void run_testing_thread(const struct Config og_config) {
                     assert( sieve_data->current_testing_x == sieve_data->current_sieve_x );
                     if (sieve_data->next_tests_m_i.empty()) {
                         lock.unlock();
-                        usleep(2'000); // 1ms
+                        usleep(1'000); // 1ms
                         gpu_stats.wait_no_next_tests++;
                         continue;
                     }
@@ -1310,8 +1348,8 @@ void run_testing_thread(const struct Config og_config) {
                     stats.s_total_prp_tests,
                     100.0 * stats.s_total_primes / stats.s_total_prp_tests,
                     (uint32_t) (stats.s_total_prp_tests / total_t));
-            printf("\twaits on no active_m(10ms) : %ld\n", gpu_stats.wait_not_active);
-            printf("\twaits on no next_tests(2ms): %ld\n", gpu_stats.wait_no_next_tests);
+            printf("\twaits on no active_m(5ms) : %ld\n", gpu_stats.wait_not_active);
+            printf("\twaits on no next_tests(1ms): %ld\n", gpu_stats.wait_no_next_tests);
             printf("\tfilling batches: %.1f seconds (%.1f%%)\n",
                     gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
             printf("\twaiting filled : %.1f seconds (%.1f%%)\n",
