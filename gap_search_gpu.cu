@@ -215,7 +215,8 @@ class SieveData {
         // all indexes < test_i have been queued by fill_batch
         size_t test_i = 0;
 
-        /* BITSET of m_i where a prime has been found (at any X). */
+        /* BITSET of half of m_i where a prime has been found (at any X). */
+        // TODO test impact of changing to uint32_t
         vector<uint8_t> found_prime_m_i;
 
         /**
@@ -235,7 +236,7 @@ class SieveData {
         /** sieve_mtx must be held while calling */
         void increment_X();
 
-        void add_found_prime_m_i(const vector<uint32_t>& m_i);
+        void add_found_prime_m_i(const uint32_t m_i);
 };
 
 
@@ -284,7 +285,7 @@ void SieveData::setup_sieve_data(bool stop) {
     next_tests_m_i.clear();
 
     // Need to be able to write to config.minc >> 3
-    found_prime_m_i.resize(config.m_inc / 8 + 2, 0);
+    found_prime_m_i.resize((config.m_inc/2) / 8 + 2, 0);
 
     if (stop)
         return;
@@ -304,18 +305,20 @@ void SieveData::setup_sieve_data(bool stop) {
 void remove_vector(vector<uint32_t> &A, const vector<uint8_t> &B) {
     size_t i = 0;
     for (uint32_t a : A) {
-        if (B[a >> 3] & (1 << (a & 7)))
+        // TODO add comment and rename this slightly
+        uint32_t index = a >> 1;
+        if (B[index >> 3] & (1 << (index & 7)))
             continue;
         A[i++] = a;
     }
     A.resize(i);
 }
 
-void SieveData::add_found_prime_m_i(const vector<uint32_t> &m_i) {
-    for (auto i : m_i) {
-        assert(i < config.m_inc);
-        found_prime_m_i[i >> 3] |= 1 << (i & 7);
-    }
+inline void SieveData::add_found_prime_m_i(const uint32_t m_i) {
+    assert(m_i < config.m_inc);
+    // all m_i are even (see sieve) so shift down by 1
+    uint32_t t = m_i >> 1;
+    found_prime_m_i[t >> 3] |= 1 << (t & 7);
 }
 
 /** sieve_mtx must be held while calling */
@@ -403,9 +406,6 @@ class GPUBatch {
         vector<uint8_t>  active;
         // Result from GPU
         vector<int>  result;
-
-        // temp vector to briefly hold primes
-        vector<uint32_t> temp_prime_m_i;
 
         // For signaling, must be owned to change state.
         std::mutex mutex;
@@ -1066,8 +1066,8 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
 /** sieve_mtx must be held while calling */
 uint32_t process_finished_batch(GPUBatch& batch) {
 
-    auto &temp = batch.temp_prime_m_i;
-    temp.clear();
+    uint32_t found = 0;
+    uint32_t m_i = 0;
     for (size_t i = 0; i < GPU_BATCH_SIZE; i++) {
         if (!batch.active[i]) {
             continue;
@@ -1076,21 +1076,19 @@ uint32_t process_finished_batch(GPUBatch& batch) {
         assert (batch.result[i] == 0 || batch.result[i] == 1);
 
         if (batch.result[i]) {
-            // Found prime!
-            temp.push_back(batch.m_i[i]);
+            found++;
+            m_i = batch.m_i[i];
+            sieve_data->add_found_prime_m_i(m_i);
         }
     }
     assert(batch.x == sieve_data->current_testing_x);
-    sieve_data->add_found_prime_m_i(temp);
-    if ((rand() & 255) == 0) {
+
+    if (found > 0 && (rand() & 255) == 0) {
         // Spot check
         std::lock_guard lock(overflow_mtx);
-        spot_check.emplace_back(
-            sieve_data->config.m_start + temp[rand() % temp.size()],
-            batch.x
-        );
+        spot_check.emplace_back(sieve_data->config.m_start + m_i, batch.x);
     }
-    return batch.temp_prime_m_i.size();
+    return found;
 }
 
 /** sieve_mtx must be held while calling */
@@ -1125,7 +1123,8 @@ void fill_batch(
             // Skip any element where a previous prime was found.
             // Happens when primes from last X weren't removed from active_m before sieve started.
             uint32_t m_i = sieve_data->unknown_m_i[j];
-            if (sieve_data->found_prime_m_i[m_i >> 3] & (1 << (m_i & 7)))
+            uint32_t index = m_i >> 1;
+            if (sieve_data->found_prime_m_i[index >> 3] & (1 << (index & 7)))
                 continue;
 
             uint64_t m = m_start + sieve_data->unknown_m_i[j];
