@@ -64,6 +64,10 @@ def get_arg_parser():
         '-s', '--sort', action="store_true",
         help="Sort new records by gapsize")
 
+    parser.add_argument(
+        '--show-old', action="store_true",
+        help="Show records being replaced")
+
     return parser
 
 
@@ -201,17 +205,20 @@ def print_record_gaps(args, gaps):
                     print()
                 print("\t", line)
 
+            if args.show_old and improvements:
+                # I'd like these sorted by gap
+                records = list(improvements.items())
+                if args.sort:
+                    records.sort()
+                print()
+                for k, (plus, old) in records:
+                    print("\t", f"{k:5} +{plus:.2f} {old[0]} improves {old[2]} by {old[3]}")
+
             print()
             print("Records {} unique {} {}".format(
                 len(record_lines), len(seen),
                 f"({len(own_records)} already submitted)" if own_records else ""))
             if improvements:
-                # I'd like these sorted by gap
-                records = list(improvements.items())
-                if args.sort:
-                    records.sort()
-                for k, (plus, old) in records:
-                    print("\t", f"{k:5} +{plus:.2f} improves {old[2]} by {old[3]}")
                 print("Merit  : +{:.2f} total, +{:.2f} for {}".format(
                     sum(v[0] for v in improvements.values()),
                     *max((v[0], k) for k, v in improvements.items())))
