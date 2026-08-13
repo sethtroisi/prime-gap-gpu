@@ -370,7 +370,8 @@ std::condition_variable overflow_cv;
 // deque (double ended queue) avoids a degenerate case of large gap getting stuck
 // if this can't keep up. Try to avoid falling behind, but this is an extra safety.
 deque<std::pair<uint64_t, uint32_t>> overflowed;
-
+// M * K + X which was marked prime by GPU. should be prime 100% of time.
+deque<std::pair<uint64_t, uint32_t>> spot_check;
 
 class GPUBatch {
     public:
@@ -387,6 +388,9 @@ class GPUBatch {
 
         // current index;
         size_t i;
+
+        // testing 'm * K + x'
+        uint32_t x;
 
         // number to check if prime
         vector<mpz_t*> z;
@@ -748,7 +752,7 @@ void run_sieve_thread(void) {
                         + (X <= 2)
                         + (config.m_start <= 1'000'000)) >= 3) {
                 auto M_end = m_start + m_inc;
-                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active took %.ff + %.3f seconds \n",
+                printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active took %.3f + %.3f seconds \n",
                        m_start / 1'000'000, M_end / 1'000'000,
                        X, unknowns_size, active_size,
                        sieve_duration_t, finalize_duration_t);
@@ -787,13 +791,19 @@ void run_sieve_thread(void) {
 
 class TestingStats {
     public:
-        std::atomic<uint64_t> tested;
-        std::atomic<uint64_t> skipped_prev;
-        std::atomic<uint64_t> tested_prev;
-        std::atomic<uint64_t> greater_than_min_merit;
-        std::atomic<uint64_t> mismatches;
+        std::atomic<uint64_t> tested = 0;
+        std::atomic<uint64_t> skipped_prev = 0;
+        std::atomic<uint64_t> tested_prev = 0;
+        std::atomic<uint64_t> greater_than_min_merit = 0;
+        std::atomic<uint64_t> mismatches = 0;
+
+        std::atomic<uint64_t> spot_checked = 0;
 };
 TestingStats stats;
+
+bool overflow_should_run() {
+    return !is_running || stop_queue >= 2 || overflowed.size();
+}
 
 void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
     try {
@@ -822,15 +832,15 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = config.m_inc * config.cpu_fraction;
 
-        std::unique_lock<std::mutex> lock(overflow_mtx, std::defer_lock);
+        std::unique_lock<std::mutex> lock(overflow_mtx);
         while (is_running && (stop_queue < 2 || overflowed.size() > 0)) {
-            // Important so that overflow_cv / unlock waits correctly
-            if (!lock.owns_lock())
-                lock.lock();
+            assert(lock.owns_lock());
             // Lock IS NOT held while waiting.
-            overflow_cv.wait(lock, []{ return overflowed.size() || !is_running || stop_queue >= 2; });
+            overflow_cv.wait(lock, overflow_should_run);
 
-            while (is_running && overflowed.size()) {
+            while (is_running && (overflowed.size() || spot_check.size())) {
+                assert(lock.owns_lock());
+
                 // process_results does most printing. This is to gauge overflow size.
                 if (stats.tested % 10'000 == 0 && overflowed.size() > overflow_too_much) {
                     printf("\tCPU Sieve Queue: %lu open, %lu processed\n",
@@ -842,8 +852,27 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                         stop_queue.load(), overflowed.size(), stats.tested.load());
                 }
 
-                if (!lock.owns_lock())
-                    lock.lock();
+
+                if (!overflowed.size()) {
+                    stats.spot_checked++;
+                    assert(spot_check.size());
+                    auto m_and_x = spot_check.front(); spot_check.pop_front();
+                    mpz_mul_ui(center, K, m_and_x.first);
+                    mpz_add_ui(next_p, center, m_and_x.second);
+                    if (!mpz_probab_prime_p(next_p, 20)) {
+                        printf("\n\n");
+                        printf("%lu'th SPOT CHECK FAILED!\n", stats.spot_checked.load());
+                        printf("%lu * %u# / %u + %u is not prime!\n",
+                                m_and_x.first, config.p, config.d, m_and_x.second);
+                        printf("\n\n");
+                        exit(1);
+                    } else {
+                        if (stats.spot_checked % 1000 == 1)
+                            printf("\t%lu'th spot checked passed!\n", stats.spot_checked.load());
+                    }
+                    continue;
+                }
+
                 auto m_and_x = overflowed.front(); overflowed.pop_front();
                 lock.unlock();
 
@@ -889,12 +918,15 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                         }
                     }
                 }
+
+                lock.lock();
             }
         }
 
         if (i == 0 && config.verbose >= 1) {
             printf("\nCPU OVERFLOW Timing:\n");
             printf("\ttotal tested: %lu\n", stats.tested.load());
+            printf("\tspot checked: %lu\n", stats.spot_checked.load());
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
             printf("\t> %.1f merit: %lu (%lu = %.1f%% bad next_prime)\n",
@@ -941,7 +973,7 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
 
     std::lock_guard lock(overflow_mtx);
     for (uint32_t m_i : sieve_data->active_m_i) {
-        overflowed.push_back({m_start + m_i, min_X});
+        overflowed.emplace_back(m_start + m_i, min_X);
     }
     stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
     stats.s_tests += sieve_data->num_valid;
@@ -960,7 +992,9 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
 
 /** sieve_mtx must be held while calling */
 uint32_t process_finished_batch(GPUBatch& batch) {
-    batch.temp_prime_m_i.clear();
+
+    auto &temp = batch.temp_prime_m_i;
+    temp.clear();
     for (size_t i = 0; i < GPU_BATCH_SIZE; i++) {
         if (!batch.active[i]) {
             continue;
@@ -970,10 +1004,19 @@ uint32_t process_finished_batch(GPUBatch& batch) {
 
         if (batch.result[i]) {
             // Found prime!
-            batch.temp_prime_m_i.push_back(batch.m_i[i]);
+            temp.push_back(batch.m_i[i]);
         }
     }
-    sieve_data->add_found_prime_m_i(batch.temp_prime_m_i);
+    assert(batch.x == sieve_data->current_testing_x);
+    sieve_data->add_found_prime_m_i(temp);
+    if ((rand() & 255) == 0) {
+        // Spot check
+        std::lock_guard lock(overflow_mtx);
+        spot_check.emplace_back(
+            sieve_data->config.m_start + temp[rand() % temp.size()],
+            batch.x
+        );
+    }
     return batch.temp_prime_m_i.size();
 }
 
@@ -981,11 +1024,14 @@ uint32_t process_finished_batch(GPUBatch& batch) {
 void fill_batch(
         uint32_t batch_i,
         GPUBatch& batch,
-        const mpz_t &K) {
+        const mpz_t &K,
+        const uint32_t x) {
     assert( batch.state == GPUBatch::State::EMPTY);
 
     // Grap some entries from each item in M
+
     batch.i = 0;
+    batch.x = x;
     // Turn off all entries in batch
     std::fill_n(batch.active.begin(), GPU_BATCH_SIZE, false);
     // Mark all results as invalid
@@ -995,14 +1041,11 @@ void fill_batch(
 
     mpz_t t;
     mpz_init(t);
-    uint64_t X;
     size_t j;
     uint32_t first_test_i = sieve_data->test_i;
     {
         assert(sieve_data->state == SieveData::State::ACTIVE ||
                sieve_data->state == SieveData::State::FINAL);
-        X = sieve_data->current_testing_x;
-
         uint32_t gpu_i = batch.i;  // [GPU] batch index
         j = sieve_data->test_i;
         for (; j < sieve_data->unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++) {
@@ -1014,8 +1057,7 @@ void fill_batch(
 
             uint64_t m = m_start + sieve_data->unknown_m_i[j];
             mpz_mul_ui(t, K, m);
-            mpz_add_ui(*batch.z[gpu_i], t, X);
-            //gmp_printf("%lu * K + %lu = %Zd\n", m, X, batch.z[gpu_i]);
+            mpz_add_ui(*batch.z[gpu_i], t, x);
             batch.active[gpu_i] = true;
             batch.m_i[gpu_i] = sieve_data->unknown_m_i[j];
             gpu_i++;
@@ -1030,15 +1072,15 @@ void fill_batch(
     assert( batch.i <= GPU_BATCH_SIZE);
 
     if (sieve_data->config.verbose >= 3 && first_test_i < sieve_data->test_i) {
-        printf("\t\tFilled Batch(%u) | X=%lu -> [%u, %lu) of %lu\n",
-            batch_i, X,
+        printf("\t\tFilled Batch(%u) | X=%u -> [%u, %lu) of %lu\n",
+            batch_i, x,
             first_test_i, sieve_data->test_i, sieve_data->unknown_m_i.size());
     }
 
     // Batches should be full unless lots of overflowed results.
     if (sieve_data->config.verbose >= 3 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
-        printf("Partial load @ %lu -> %lu this batch: %lu/%lu\n",
-            X, j, batch.i, GPU_BATCH_SIZE);
+        printf("Partial load @ %u -> %lu this batch: %lu/%lu\n",
+            x, j, batch.i, GPU_BATCH_SIZE);
     }
 }
 
@@ -1155,7 +1197,7 @@ void run_testing_thread(const struct Config og_config) {
                     }
 
                     batch.fill_start = high_resolution_clock::now();
-                    fill_batch(i, batch, K);
+                    fill_batch(i, batch, K, sieve_data->current_testing_x);
                     batch.fill_end = high_resolution_clock::now();
 
                     if (batch.i == 0) {

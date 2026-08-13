@@ -398,7 +398,6 @@ if (program == Pr::SEARCH_GPU) {
     cout << "  --max-prime" << endl;
     cout << "    use primes <= max-prime (in millions) for checking composite" << endl;
     cout << endl;
-    cout << "  --max_mem <max gpu memory in MB>" << endl;
     cout << "  --cpu-fraction <fraction of results to finalize on CPU>" << endl;
     cout << "  --cpu-threads <number of CPU threads for finalizing>" << endl;
 }
@@ -426,7 +425,6 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
         {"max-prime",        required_argument, 0,   5  },
 
-        {"max-mem",          required_argument, 0,   6  },
         {"cpu-fraction",     required_argument, 0,   7  },
         {"cpu-threads",      required_argument, 0,   8  },
 
@@ -481,9 +479,6 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
                 config.max_prime = atol(optarg) * 1'000'000;
                 break;
 
-            case 6:
-                config.max_gpu_mem_mb = atol(optarg);
-                break;
             case 7:
                 config.cpu_fraction = atof(optarg);
                 break;
@@ -529,11 +524,10 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         cout << "mstart must be greater than 0: " << config.m_start << endl;
     }
 
-    int64_t last_m = config.m_start + config.m_inc;
-    // TODO something about max_mem here
-    if (last_m <= 0 || last_m > 100'000'000'001 ) {
+    int64_t last_m = config.m_start + 1000 * config.m_inc;
+    if (last_m <= 0 || last_m > 1000'000'000'001 ) {
         config.valid = 0;
-        cout << "mstart + minc must be <= 100e9" << endl;
+        cout << "mstart + 1000 * minc must be <= 1e12" << endl;
     }
 
     if (config.m_inc <= 0) {
@@ -549,13 +543,13 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         config.valid = 0;
         cout << "max_prime must be set" << endl;
     }
-    if (config.max_prime > 4'000'000'000) {
+    if (config.max_prime > 2'000'000'000) {
         config.valid = 0;
-        cout << "max_prime > 4B not supported" << endl;
+        cout << "max_prime > 2B not supported" << endl;
     }
 
     {
-        uint64_t max_m = std::numeric_limits<uint64_t>::max() / config.max_prime;
+        uint64_t max_m = std::numeric_limits<int64_t>::max() / config.max_prime;
         if (max_m < 1000 || max_m <= (size_t) (last_m + 1000)) {
             config.valid = 0;
             printf("max_prime * last_m(%ld) would overflow int64, log2(...) = %.3f\n",
@@ -580,16 +574,6 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
     if (config.d <= 0) {
         config.valid = 0;
         cout << "d must be greater than 0: " << config.d << endl;
-    }
-
-    if (config.max_gpu_mem_mb < 200) {
-        config.valid = 0;
-        cout << "max-mem must be greater than 200: " << config.max_gpu_mem_mb << endl;
-    }
-
-    if (config.max_gpu_mem_mb > 64'000) {
-        config.valid = 0;
-        cout << "max-mem can't be larger than 64'000: " << config.max_gpu_mem_mb << endl;
     }
 
     if (config.cpu_fraction < .00001 || config.cpu_fraction > .1) {
