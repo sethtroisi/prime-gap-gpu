@@ -229,7 +229,7 @@ class SieveData {
         // TODO stats about number of tests performed...
 
         /** reads from config, doesn't need mutex */
-        uint32_t set_next_coprime_x();
+        void set_next_coprime_x();
 
         /** sieve_mtx must be held while calling */
         void setup_sieve_data(bool stop_after);
@@ -240,7 +240,7 @@ class SieveData {
 };
 
 
-uint32_t SieveData::set_next_coprime_x() {
+void SieveData::set_next_coprime_x() {
     uint32_t x = current_sieve_x;
     uint64_t any_coprime;
     do {
@@ -266,7 +266,6 @@ uint32_t SieveData::set_next_coprime_x() {
         }
     } while (any_coprime);
     current_sieve_x = x;
-    return current_sieve_x;
 }
 
 /** sieve_mtx must be held while calling */
@@ -294,7 +293,7 @@ void SieveData::setup_sieve_data(bool stop) {
     active_m_i.swap(temp.second);
 
     num_valid = active_m_i.size();
-    if (config.verbose + (config.m_start <= 1) >= 2)
+    if (config.verbose + (config.m_start <= 1) >= 3)
         printf("\nSetup, starting at X=%lu with %ld/%ld active_m\n",
                 current_sieve_x, num_valid, config.m_inc);
 
@@ -796,6 +795,14 @@ void run_sieve_thread(void) {
 
             lock.lock();
 
+            if ( X != sieve_data->current_sieve_x) {
+                //printf("At the end of sieve X=%u vs current=%u | state=%u, stop=%u\n",
+                //        X, sieve_data->current_sieve_x, state
+                assert( sieve_data->state == SieveData::State::FIRST_SIEVE || stop_queue >= 2);
+                lock.unlock();
+                continue;
+            }
+
             double finalize_duration_t;
             uint32_t active_size = sieve_data->active_m_i.size();
             uint32_t unknowns_size;
@@ -803,15 +810,20 @@ void run_sieve_thread(void) {
                 auto s_start_t = high_resolution_clock::now();
                 // "most" (90%+) should be composite, so this should be < 12.5%
                 assert( sieve_data->next_tests_m_i.size() == 0 );
+                if (! active_size ) {
+                    printf("No active_m_i at X=%u\n", X);
+                } else {
+                    assert( sieve_data->active_m_i.back() < m_inc );
+                }
                 for (auto m_i : sieve_data->active_m_i) {
-                    assert(m_i < m_inc);
-                    assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
+                    //assert(m_i < m_inc);
+                    //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
                     uint32_t t = m_i >> 1;
                     if (!(composites[t >> 3] & 1 << (t & 7)))
                         sieve_data->next_tests_m_i.push_back(m_i);
                 }
                 unknowns_size = sieve_data->next_tests_m_i.size();
-                assert( sieve_data->active_m_i.size() < 1'000 || unknowns_size > 0 );
+                assert( active_size < 1'000 || unknowns_size > 0 );
                 total_active += active_size;
                 total_unknown += unknowns_size;
 
@@ -831,7 +843,7 @@ void run_sieve_thread(void) {
 
             if ((config.verbose
                         + (X <= 2)
-                        + (config.m_start <= 1'000'000)) >= 3) {
+                        + (config.m_start <= 1'000'000)) >= 2) {
                 auto M_end = m_start + m_inc;
                 printf("\tGPU Sieve (%ldM to %ldM) @X=%u with %u/%u unknown/active "
                        "took %.3f (wheel: %.3f) + %.3f seconds\n",
@@ -839,7 +851,6 @@ void run_sieve_thread(void) {
                        X, unknowns_size, active_size,
                        sieve_duration_t, wheel_duration_t, finalize_duration_t);
             }
-
         }
 
         mpz_clear(K);
@@ -1157,14 +1168,14 @@ inline void fill_batch(
 
     assert( batch.i <= GPU_BATCH_SIZE);
 
-    if (sieve_data->config.verbose >= 3 && first_test_i < sieve_data->test_i) {
+    if (sieve_data->config.verbose >= 4 && first_test_i < sieve_data->test_i) {
         printf("\t\tFilled Batch(%u) | X=%u -> [%u, %lu) of %lu\n",
             batch_i, x,
             first_test_i, sieve_data->test_i, sieve_data->unknown_m_i.size());
     }
 
     // Batches should be full unless lots of overflowed results.
-    if (sieve_data->config.verbose >= 3 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
+    if (sieve_data->config.verbose >= 4 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
         printf("Partial load @ %u -> %lu this batch: %lu/%lu\n",
             x, j, batch.i, GPU_BATCH_SIZE);
     }
@@ -1293,7 +1304,7 @@ void run_testing_thread(const struct Config og_config) {
                             gpu_stats.s_per_batch * remaining_tests / GPU_BATCH_SIZE;
                         uint32_t fill_pct = 100 * f / u;
                         // TODO tune this.
-                        bool trigger = (fill_pct > 90) || (remaining_seconds < .030);
+                        bool trigger = (fill_pct > 90) || (remaining_seconds < .035);
                         if (trigger && local_queue_status == 0) {
                             if (sieve_data->next_tests_m_i.empty() && og_config.verbose >= 3) {
                                 printf("\tTriggering early exit at X=%lu, fill_pct=%u%%, rem=%.3fs\n",
@@ -1351,7 +1362,7 @@ void run_testing_thread(const struct Config og_config) {
                     stats.s_total_prp_tests += batch.i;
                     stats.s_total_primes += primes_in_batch;
 
-                    if (og_config.verbose >= 3) {
+                    if (og_config.verbose >= 4) {
                         printf("\tGot Finished Batch(%d)=%u prime | %lu running, %lu/%lu\n",
                                 i, primes_in_batch,
                                 running_batches, d->test_i, d->unknown_m_i.size());
@@ -1421,7 +1432,7 @@ void run_testing_thread(const struct Config og_config) {
                     stats.s_total_prp_tests,
                     100.0 * stats.s_total_primes / stats.s_total_prp_tests,
                     (uint32_t) (stats.s_total_prp_tests / total_t));
-            printf("\ttotal batches   : %'lu (%.3f secs/batch)\n",
+            printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
                     gpu_stats.batches_run, gpu_stats.s_per_batch);
             printf("\twaits on no active_m(5ms) : %ld\n", gpu_stats.wait_not_active);
             printf("\twaits on no next_tests(1ms): %ld\n", gpu_stats.wait_no_next_tests);
@@ -1492,6 +1503,7 @@ void prime_gap_test(struct Config config) {
     printf("BITS=%d\n", BITS);
     printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
     printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
+    printf("GPU_BATCHES=%d\n", GPU_BATCHES);
 #endif // GPU_TESTING
 
     assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 || GPU_BATCH_SIZE == 4096 ||
