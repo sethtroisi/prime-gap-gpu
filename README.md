@@ -68,6 +68,9 @@ SIEVE Timings:
 
   * [ ] Faster sieving
     * AVX
+    * faster finalize would help with early exit
+  * [ ] Try changing vector<uint8_t> to vector<uint32_t>
+  * [ ] Why does X=12 have twice as many unknowns at X=482?
 
 ## TODONE
 
