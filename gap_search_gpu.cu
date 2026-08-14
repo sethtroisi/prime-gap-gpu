@@ -352,16 +352,18 @@ void SieveData::increment_X() {
 /** Shared state between threads */
 std::atomic<bool> is_running;
 std::atomic<uint8_t> stop_queue(0);
+std::atomic<uint8_t> testing_queue_status(0);
 /**
- * stop_queue = 0
-    * everything normal
- * stop_queue = 1
-    continue like normal till increment_m
- * stop_queue = 2
-    stop sieve & gpu_tester
-    wait for overflow to finish
  * is_running = false
     stop immediately
+ * stop_queue
+    * 0: everything normal
+    * 1: continue like normal till increment_m
+    * 2: stop sieve & gpu_tester
+         wait for overflow to finish
+ * testing_queue_status
+    * 0: Full and happy
+    * 1: Running low on entries (sieve should stop now)
  */
 
 // Don't read from sieve_data without holding sieve_mtx
@@ -471,7 +473,7 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             if (!is_running || stop_queue > 1) break;
 
             assert(batch.state == GPUBatch::State::READY);
-            // Active items are all at the front of the batch.
+            // Verify all active items are all at the front of the batch.
             auto mid = batch.active.begin();
             std::advance(mid, batch.i);
             assert((uint32_t) std::count(batch.active.begin(), mid, 1) == batch.i);
@@ -608,10 +610,12 @@ void run_sieve_thread(void) {
         vector<uint8_t> d_wheel(4*D, 0);
         vector<uint32_t> d_indexes;
         uint64_t last_sieved = 0;
-        uint64_t total_m = m_inc;
+        uint64_t total_m = 0;
         uint64_t total_runs = 0;
+        uint64_t total_early_breaks = 0;
         uint64_t total_active = 0;
         uint64_t total_unknown = 0;
+        uint64_t total_primes = 0;
         double total_time = 0;
         double finalize_time = 0;
 
@@ -783,10 +787,19 @@ void run_sieve_thread(void) {
                 }
             }
 
+            uint32_t prime = config.max_prime;
+
             auto s_stop_t = high_resolution_clock::now();
             double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();
             total_runs += 1;
             total_time += sieve_duration_t;
+            total_primes += prime;
+            total_early_breaks += (testing_queue_status > 0);
+
+            if (config.verbose >= 3) {
+                printf("\tsieve(X=%u) ended at %u after %.3f (%u)\n",
+                        X, prime, sieve_duration_t, testing_queue_status.load());
+            }
 
             lock.lock();
 
@@ -838,13 +851,15 @@ void run_sieve_thread(void) {
 
         mpz_clear(K);
 
-        if (config.verbose >= 1) {
+        if (config.verbose >= 1 && total_runs > 0) {
             double total_s = duration<double>(high_resolution_clock::now() - s_thread_start_t).count();
             setlocale(LC_NUMERIC, "");
             printf("\nSIEVE Timings:\n");
             printf("\ttotal_m: %'lu (%'u/second) %.1f seconds\n",
                     total_m, (uint32_t) (total_m / total_s), total_s);
-            printf("\tsieves: %lu\n", total_runs);
+            printf("\tsieves: %lu (%.1f%% early exit)\n",
+                    total_runs, 100.0 * total_early_breaks / total_runs);
+            printf("\tavg prime: %'lu\n", total_primes / total_runs);
             printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
             printf("\ttotal_time: %.1f seconds (%.3f/sieve)\n",
@@ -923,11 +938,17 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                             overflowed.size(), stats.tested.load());
                 }
 
-                if (stop_queue > 0 && stats.tested.load() % 10'000 == 0) {
-                    printf("\tFinalizing(stage %d): %lu open, %lu processed\n",
-                        stop_queue.load(), overflowed.size(), stats.tested.load());
+                if (stop_queue > 0) {
+                    uint32_t rem = overflowed.size();
+                    bool is_power_print = false;
+                    for (uint64_t p = 1000; p <= rem; p *= 10) {
+                        is_power_print |= (rem == p) || (rem == 2*p) || (rem == 5*p);
+                    }
+                    if (is_power_print) {
+                        printf("\tFinalizing(stage %d): %u open, %lu processed\n",
+                            stop_queue.load(), rem, stats.tested.load());
+                    }
                 }
-
 
                 if (!overflowed.size()) {
                     stats.spot_checked++;
@@ -1002,9 +1023,12 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
             printf("\tspot checked: %lu\n", stats.spot_checked.load());
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
-            printf("\t> %.1f merit: %lu (%lu = %.1f%% bad next_prime)\n",
-                    config.min_merit, stats.greater_than_min_merit.load(), stats.mismatches.load(),
-                    100.0 * stats.mismatches.load() / stats.greater_than_min_merit.load());
+            uint32_t large = stats.mismatches + stats.greater_than_min_merit;
+            if (large) {
+                printf("\t> %.1f merit: %lu (%lu = %.1f%% bad next_prime)\n",
+                        config.min_merit, stats.greater_than_min_merit.load(), stats.mismatches.load(),
+                        100.0 * stats.mismatches.load() / large);
+            }
             printf("\n");
         }
 
@@ -1203,6 +1227,7 @@ void run_testing_thread(const struct Config og_config) {
 
         StatsCounters stats(high_resolution_clock::now());
         GpuStatsCounters gpu_stats;
+        gpu_stats.s_per_batch = 1; // lie to avoid issue on first pass.
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
@@ -1220,10 +1245,7 @@ void run_testing_thread(const struct Config og_config) {
         // Silly but that's what life is.
         std::queue<int> open_gpu;
         uint64_t running_batches = 0;
-
-        //auto s_start_t = high_resolution_clock::now();
-        //auto s_batch0_t = s_start_t;
-        //auto s_batch1_t = s_start_t;
+        uint8_t local_queue_status = 0;
 
         // Main loop
         while (is_running && stop_queue <= 1) {
@@ -1271,6 +1293,27 @@ void run_testing_thread(const struct Config og_config) {
                     batch.fill_start = high_resolution_clock::now();
                     fill_batch(i, batch, K, sieve_data->current_testing_x);
                     batch.fill_end = high_resolution_clock::now();
+
+                    {
+                        uint32_t u = sieve_data->unknown_m_i.size();
+                        uint32_t f = sieve_data->test_i;
+                        uint32_t remaining_tests = u - f;
+                        double remaining_seconds =
+                            gpu_stats.s_per_batch * remaining_tests / GPU_BATCH_SIZE;
+                        uint32_t fill_pct = 100 * f / u;
+                        // TODO tune this.
+                        bool trigger = (fill_pct > 90) || (remaining_seconds < .030);
+                        if (trigger && local_queue_status == 0) {
+                            if (sieve_data->next_tests_m_i.empty() && og_config.verbose >= 3) {
+                                printf("\tTriggering early exit at X=%lu, fill_pct=%u%%, rem=%.3fs\n",
+                                       sieve_data->current_testing_x, fill_pct, remaining_seconds);
+                            }
+                            // Does nothing if sieve is already done, but not harmful to set.
+                            //testing_queue_status = 1;
+                            local_queue_status = 1;
+                        }
+                    }
+
 
                     if (batch.i == 0) {
                         // Leave as empty and unlock
@@ -1333,6 +1376,8 @@ void run_testing_thread(const struct Config og_config) {
                         } else {
                             sieve_data->increment_X();
                         }
+                        local_queue_status = 0;
+                        testing_queue_status = 0;
                     }
                     sieve_mtx.unlock();
 
@@ -1343,6 +1388,7 @@ void run_testing_thread(const struct Config og_config) {
                     double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
                     double ms_queued_done = duration<double>(batch.results_start - batch.gpu_end).count();
                     double ms_results = duration<double>(batch.results_end - batch.results_start).count();
+                    double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
 
                     gpu_stats.batches_run += 1;
                     gpu_stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
@@ -1351,6 +1397,7 @@ void run_testing_thread(const struct Config og_config) {
                     gpu_stats.d_run += ms_run;
                     gpu_stats.d_queued_done += ms_queued_done;
                     gpu_stats.d_results += ms_results;
+                    gpu_stats.s_per_batch = total_t / gpu_stats.batches_run;
 
                     //if (rand() % (1 * 1024) == 0) {
                     if (0) {
@@ -1382,6 +1429,8 @@ void run_testing_thread(const struct Config og_config) {
                     stats.s_total_prp_tests,
                     100.0 * stats.s_total_primes / stats.s_total_prp_tests,
                     (uint32_t) (stats.s_total_prp_tests / total_t));
+            printf("\ttotal batches   : %'lu (%.3f secs/batch)\n",
+                    gpu_stats.batches_run, gpu_stats.s_per_batch);
             printf("\twaits on no active_m(5ms) : %ld\n", gpu_stats.wait_not_active);
             printf("\twaits on no next_tests(1ms): %ld\n", gpu_stats.wait_no_next_tests);
             printf("\tfilling batches: %.1f seconds (%.1f%%)\n",
