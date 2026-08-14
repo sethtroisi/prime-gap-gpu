@@ -92,7 +92,7 @@ const int ROUNDS = 1;
  * Big saving when X has few unknowns
  *      -> some ranges have 1/2 as many for some unknown (to seth) reason
  */
-const size_t OPEN_SIEVES = 3;
+const size_t OPEN_SIEVES = 4;
 
 
 
@@ -702,8 +702,8 @@ void run_sieve_thread(void) {
                     continue;
                 }
 
-                // tweak max_p_i if to many open_slots.
-                if (open_slots > 1 && sieve_data->sieve_x_i > 10) {
+                // tweak max_p_i if too many open_slots.
+                if (open_slots > 2 && sieve_data->sieve_x_i > 10) {
                     max_p_i -= max_p_i / 12;
                 }
             }
@@ -1104,10 +1104,10 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
             printf("\tspot checked: %lu\n", stats.spot_checked.load());
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
-            uint32_t large = stats.mismatches + stats.greater_than_min_merit;
+            uint32_t large = stats.greater_than_min_merit;
             if (large) {
                 printf("\t> %.1f merit: %lu (%lu = %.1f%% bad next_prime)\n",
-                        config.min_merit, stats.greater_than_min_merit.load(), stats.mismatches.load(),
+                        config.min_merit, large, stats.mismatches.load(),
                         100.0 * stats.mismatches.load() / large);
             }
             printf("\n");

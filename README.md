@@ -68,9 +68,7 @@ SIEVE Timings:
 
   * [ ] Faster sieving
     * AVX
-    * faster finalize would help with early exit
   * [ ] Why does X=12 have twice as many unknowns at X=482?
-  * [ ] Fix denominator of bad next_prime
 
 ## TODONE
 
