@@ -581,7 +581,8 @@ void run_sieve_thread(void) {
                 const int32_t inv_K = _invert(base_r, prime);
                 assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
                 assert( ((uint64_t) inv_K * base_r) % prime == 1 );
-                if (config.m_inc / 13 > prime) {
+                // Never sieve less than this.
+                if (prime < 100'000) {
                     p_and_neg_inverse_k_small.emplace_back((uint32_t) prime, prime - inv_K);
                 } else {
                     p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
@@ -647,6 +648,7 @@ void run_sieve_thread(void) {
 
             assert(sieve_data->next_tests_m_i.size() == 0);
             config = sieve_data->config;
+
             lock.unlock();
 
             auto s_start_t = high_resolution_clock::now();
@@ -702,27 +704,49 @@ void run_sieve_thread(void) {
                 wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
             }
 
+            uint32_t prime = 0;
+            for( const auto& [p, neg_inv_K] : p_and_neg_inverse_k_small) {
+                prime = p;
+                // if ((m * K + X) % p == 0) {
+                // if ((m * K) % p == -X) {
+                // if ((m * K * inv_K) % p == -X * inv_K) {
+                //uint64_t m_0 = (-X * inv_K) % prime;
 
-            if (X * config.max_prime < m_start) {
-                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k_small) {
-                    uint64_t mi_0 = (m_start - X * neg_inv_K) % prime;
-                    mi_0 = (mi_0 == 0) ? 0 : prime - mi_0;
+                uint64_t m_start_shift = m_start % prime;
+                m_start_shift = prime - m_start_shift;
+                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
-                    // This requires K odd and m_start even (both checked above)
-                    // See 1ba32111 for more details.
-                    mi_0 += (mi_0 & 1) ? 0 : prime;
-                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+                // This requires K odd and m_start even (both checked above)
+                // See 1ba32111 for more details.
+                mi_0 += (mi_0 & 1) ? 0 : prime;
+                mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
-                    uint32_t shift = prime;
-                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
-                        composites[t >> 3] |= 1 << (t & 7);
-                    }
+                uint32_t shift = prime;
+                for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                    composites[t >> 3] |= 1 << (t & 7);
                 }
-                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
-                    uint64_t mi_0 = (m_start - X * neg_inv_K) % prime;
-                    mi_0 = (mi_0 == 0) ? 0 : prime - mi_0;
+            }
 
-                    if (prime < M_INC_HALF) {
+            /**
+             * Optimizations
+             *
+             * if primes > M_INC_HALF can change loop to single unconditional set statement
+             *      This is probably good but isn't relevant for the wide ranges currently being tested.
+             */
+
+            uint32_t neg_inv_K;
+            if (X * config.max_prime < m_start) {
+                for (uint32_t p_i = 0; testing_queue_status == 0 && p_i < p_and_neg_inverse_k.size(); ) {
+                    uint32_t max_p_i = std::min<uint32_t>(p_i + 500, p_and_neg_inverse_k.size());
+                    for (; p_i < max_p_i; p_i++) {
+                        const auto& t = p_and_neg_inverse_k[p_i];
+                        prime = t.first;
+                        neg_inv_K = t.second;
+
+                        // Avoids a 2nd '% prime' because m_start > X * neg_inv_K.
+                        uint64_t mi_0 = (m_start - X * neg_inv_K) % prime;
+                        mi_0 = (mi_0 == 0) ? 0 : prime - mi_0;
+
                         // This requires K odd and m_start even (both checked above)
                         // See 1ba32111 for more details.
                         mi_0 += (mi_0 & 1) ? 0 : prime;
@@ -732,45 +756,20 @@ void run_sieve_thread(void) {
                         for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
                             composites[t >> 3] |= 1 << (t & 7);
                         }
-                    } else {
-                        uint64_t index = mi_0 < M_INC_HALF ? mi_0 : composites_safe_idx;
-                        index >>= 1;
-                        composites[index >> 3] |= 1 << (index & 7);
                     }
                 }
             } else {
-                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k_small) {
-                    // if ((m * K + X) % p == 0) {
-                    // if ((m * K) % p == -X) {
-                    // if ((m * K * inv_K) % p == -X * inv_K) {
-                    //uint64_t m_0 = (-X * inv_K) % prime;
+                for (uint32_t p_i = 0; testing_queue_status == 0 && p_i < p_and_neg_inverse_k.size(); ) {
+                    uint32_t max_p_i = std::min<uint32_t>(p_i + 500, p_and_neg_inverse_k.size());
+                    for (; p_i < max_p_i; p_i++) {
+                        const auto& t = p_and_neg_inverse_k[p_i];
+                        prime = t.first;
+                        neg_inv_K = t.second;
 
-                    uint64_t m_start_shift = m_start % prime;
-                    m_start_shift = prime - m_start_shift;
-                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+                        uint64_t m_start_shift = m_start % prime;
+                        m_start_shift = prime - m_start_shift;
+                        uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
-                    // This requires K odd and m_start even (both checked above)
-                    // See 1ba32111 for more details.
-                    mi_0 += (mi_0 & 1) ? 0 : prime;
-                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
-
-                    uint32_t shift = prime;
-                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
-                        composites[t >> 3] |= 1 << (t & 7);
-                    }
-                }
-
-                for( const auto& [prime, neg_inv_K] : p_and_neg_inverse_k) {
-                    // if ((m * K + X) % p == 0) {
-                    // if ((m * K) % p == -X) {
-                    // if ((m * K * inv_K) % p == -X * inv_K) {
-                    //uint64_t m_0 = (-X * inv_K) % prime;
-
-                    uint64_t m_start_shift = m_start % prime;
-                    m_start_shift = prime - m_start_shift;
-                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
-
-                    if (prime < M_INC_HALF) {
                         // This requires K odd and m_start even (both checked above)
                         // See 1ba32111 for more details.
                         mi_0 += (mi_0 & 1) ? 0 : prime;
@@ -779,15 +778,9 @@ void run_sieve_thread(void) {
                         for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
                             composites[t >> 3] |= 1 << (t & 7);
                         }
-                    } else {
-                        uint64_t index = mi_0 < M_INC_HALF ? mi_0 : composites_safe_idx;
-                        index >>= 1;
-                        composites[index >> 3] |= 1 << (index & 7);
                     }
                 }
             }
-
-            uint32_t prime = config.max_prime;
 
             auto s_stop_t = high_resolution_clock::now();
             double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();
@@ -1116,10 +1109,11 @@ uint32_t process_finished_batch(GPUBatch& batch) {
 }
 
 /** sieve_mtx must be held while calling */
-void fill_batch(
+inline void fill_batch(
         uint32_t batch_i,
         GPUBatch& batch,
         const mpz_t &K,
+        mpz_t &t,
         const uint32_t x) {
     assert( batch.state == GPUBatch::State::EMPTY);
 
@@ -1134,8 +1128,6 @@ void fill_batch(
 
     uint64_t m_start = sieve_data->config.m_start;
 
-    mpz_t t;
-    mpz_init(t);
     size_t j;
     uint32_t first_test_i = sieve_data->test_i;
     {
@@ -1162,8 +1154,6 @@ void fill_batch(
         sieve_data->test_i = j;
         batch.i = gpu_i;
     }
-
-    mpz_clear(t);
 
     assert( batch.i <= GPU_BATCH_SIZE);
 
@@ -1192,7 +1182,8 @@ void run_testing_thread(const struct Config og_config) {
 
 
         // K is initialized in prob_prime_and_stats
-        mpz_t K;
+        mpz_t K, t;
+        mpz_init(t);
         double K_log = prob_prime_and_stats(og_config, K);
         //const uint64_t P = og_config.p;
         const uint64_t D = og_config.d;
@@ -1291,7 +1282,7 @@ void run_testing_thread(const struct Config og_config) {
                     }
 
                     batch.fill_start = high_resolution_clock::now();
-                    fill_batch(i, batch, K, sieve_data->current_testing_x);
+                    fill_batch(i, batch, K, t, sieve_data->current_testing_x);
                     batch.fill_end = high_resolution_clock::now();
 
                     {
@@ -1309,7 +1300,7 @@ void run_testing_thread(const struct Config og_config) {
                                        sieve_data->current_testing_x, fill_pct, remaining_seconds);
                             }
                             // Does nothing if sieve is already done, but not harmful to set.
-                            //testing_queue_status = 1;
+                            testing_queue_status = 1;
                             local_queue_status = 1;
                         }
                     }
@@ -1417,6 +1408,7 @@ void run_testing_thread(const struct Config og_config) {
         // ----- cleanup
         {
             mpz_clear(K);
+            mpz_clear(t);
         }
 
         if (og_config.verbose >= 1) {

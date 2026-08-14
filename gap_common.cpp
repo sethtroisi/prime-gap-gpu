@@ -548,8 +548,7 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         cout << "max_prime > 2B not supported" << endl;
     }
 
-    // I'm not actually sure this is needed.
-    {
+    if (0) { // Not needed anymore?
         uint64_t max_m = std::numeric_limits<int64_t>::max() / config.max_prime;
         if (max_m < 1000 || max_m <= (size_t) (last_m + 1000)) {
             config.valid = 0;
