@@ -232,8 +232,7 @@ class SieveData {
         size_t test_i = 0;
 
         /* BITSET of half of m_i where a prime has been found (at any X). */
-        // TODO test impact of changing to uint32_t
-        vector<uint8_t> found_prime_m_i;
+        vector<uint32_t> found_prime_m_i;
 
         size_t sieve_x_i = 0;
         size_t current_sieve_x = 0;
@@ -308,7 +307,7 @@ void SieveData::setup_sieve_data(bool stop) {
     }
 
     // Need to be able to write to config.minc >> 3
-    found_prime_m_i.resize((config.m_inc/2) / 8 + 2, 0);
+    found_prime_m_i.resize((config.m_inc/2) / 32 + 2, 0);
 
     if (stop)
         return;
@@ -325,14 +324,15 @@ void SieveData::setup_sieve_data(bool stop) {
 }
 
 /** Remove any element of A where bit A is set in B. */
-void remove_vector(vector<uint32_t> &A, const vector<uint8_t> &B) {
+void remove_vector(vector<uint32_t> &A, const vector<uint32_t> &B) {
     size_t i = 0;
     for (uint32_t a : A) {
-        // TODO add comment and rename this slightly
         uint32_t index = a >> 1;
-        if (B[index >> 3] & (1 << (index & 7)))
-            continue;
-        A[i++] = a;
+        // ~10% faster to alway set A[i] (branchless)
+        A[i] = a;
+        // If this wasn't in B, increment i
+        uint32_t increment = (B[index >> 5] & (1 << (index & 31))) == 0;
+        i += increment;
     }
     A.resize(i);
 }
@@ -341,7 +341,7 @@ inline void SieveData::add_found_prime_m_i(const uint32_t m_i) {
     assert(m_i < config.m_inc);
     // all m_i are even (see sieve) so shift down by 1
     uint32_t t = m_i >> 1;
-    found_prime_m_i[t >> 3] |= 1 << (t & 7);
+    found_prime_m_i[t >> 5] |= 1 << (t & 31);
 }
 
 bool SieveData::try_set_unknowns() {
@@ -352,11 +352,12 @@ bool SieveData::try_set_unknowns() {
     for (uint32_t i = 0; i < OPEN_SIEVES; i++) {
         auto &[s_x, test_m_i] = next_sieves[i];
         if (s_x == current_testing_x) {
-            s_x = 0; // TODO does this work?
+            s_x = 0;
 
             // Set testing data.
             test_i = 0;
             unknown_m_i.swap(test_m_i);
+
             // Do a second pass removing any primes that might have been found this round.
             remove_vector(unknown_m_i, found_prime_m_i);
 
@@ -648,12 +649,12 @@ void run_sieve_thread(void) {
         const auto M_INC_HALF = m_inc / 2;
 
         // Need to be able to write to composites[m_inc] as sentinel
-        vector<uint8_t> composites(M_INC_HALF / 8 + 2, 0);
+        vector<uint32_t> composites(M_INC_HALF / 32 + 2, 0);
         const uint64_t composites_safe_idx = 8 * (composites.size() - 1);
 
         uint64_t D = config.d;
-        assert( 4 * D % 8 == 0);
-        vector<uint8_t> d_wheel(4*D, 0);
+        assert( 16 * D % 32 == 0);
+        vector<uint32_t> d_wheel(16*D / 32, 0);
         vector<uint32_t> d_indexes;
         uint64_t total_m = 0;
         uint64_t total_runs = 0;
@@ -737,23 +738,24 @@ void run_sieve_thread(void) {
                 assert(D < config.m_inc / 100); // Do something different if not true.
 
                 std::fill(d_wheel.begin(), d_wheel.end(), 0);
+                uint32_t d_wheel_bits = 32 * d_wheel.size();
 
                 for (uint32_t d : d_primes) {
                     if (d == 2) continue;
                     const uint64_t m_start_shift = m_start % d;
-                    for (uint32_t m_i = 1; m_i < d_wheel.size(); m_i += 2) {
+                    for (uint32_t m_i = 1; m_i < 2*D; m_i += 2) {
                         // check if d divides (m_start + m_i) * K + X
                         if (((m_start_shift + m_i) * K_mod_d + X) % d == 0) {
                             // mark all later multiples
-                            for( uint32_t i = m_i >> 1; i < 8*d_wheel.size(); i += d ) {
-                                d_wheel[i >> 3] |= 1 << (i & 7);
+                            for( uint32_t i = m_i >> 1; i < d_wheel_bits; i += d ) {
+                                d_wheel[i >> 5] |= 1 << (i & 31);
                             }
                             break;
                         }
                     }
                 }
 
-                // d_wheel = 8*config.d bits = multiple of d and 16, but 8 after removing half.
+                // d_wheel tiled till it's a multiple of 32 bits.
                 for(uint32_t c_i = 0; c_i < composites.size(); ) {
                     size_t copy = std::min(composites.size() - c_i, d_wheel.size());
                     for (uint32_t j = 0; j < copy; j ++) {
@@ -783,7 +785,7 @@ void run_sieve_thread(void) {
 
                 uint32_t shift = prime;
                 for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
-                    composites[t >> 3] |= 1 << (t & 7);
+                    composites[t >> 5] |= 1 << (t & 31);
                 }
             }
 
@@ -812,7 +814,7 @@ void run_sieve_thread(void) {
 
                     uint32_t shift = prime;
                     for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
-                        composites[t >> 3] |= 1 << (t & 7);
+                        composites[t >> 5] |= 1 << (t & 31);
                     }
                 }
             } else {
@@ -831,7 +833,7 @@ void run_sieve_thread(void) {
 
                     uint32_t shift = prime;
                     for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
-                        composites[t >> 3] |= 1 << (t & 7);
+                        composites[t >> 5] |= 1 << (t & 31);
                     }
                 }
             }
@@ -885,7 +887,7 @@ void run_sieve_thread(void) {
                     //assert(m_i < m_inc);
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
                     uint32_t t = m_i >> 1;
-                    if (!(composites[t >> 3] & 1 << (t & 7)))
+                    if (!(composites[t >> 5] & 1 << (t & 31)))
                         tests->push_back(m_i);
                 }
 
@@ -1226,7 +1228,7 @@ inline void fill_batch(
             // Happens when primes from last X weren't removed from active_m before sieve started.
             uint32_t m_i = sieve_data->unknown_m_i[j];
             uint32_t index = m_i >> 1;
-            if (sieve_data->found_prime_m_i[index >> 3] & (1 << (index & 7)))
+            if (sieve_data->found_prime_m_i[index >> 5] & (1 << (index & 31)))
                 continue;
 
             uint64_t m = m_start + sieve_data->unknown_m_i[j];

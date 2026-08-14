@@ -69,8 +69,8 @@ SIEVE Timings:
   * [ ] Faster sieving
     * AVX
     * faster finalize would help with early exit
-  * [ ] Try changing vector<uint8_t> to vector<uint32_t>
   * [ ] Why does X=12 have twice as many unknowns at X=482?
+  * [ ] Fix denominator of bad next_prime
 
 ## TODONE
 
@@ -78,3 +78,6 @@ SIEVE Timings:
   * [x] Check a small percent of next_primes are actually prime
   * [x] Understand what sieve limit gmp is using for overflow
     * GMP is sieving to ~4M -> 10% less efficient
+  * [x] Try changing vector<uint8_t> to vector<uint32_t>
+    * This didn't seem to have any impact on speed, but I was told it might help in
+      reduce mixed cache line access (8 vs 32 vs 64) control so I'll keep it.
