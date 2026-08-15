@@ -255,6 +255,9 @@ SieveData::SieveData(const struct Config config) {
 
     next_sieves.resize(OPEN_SIEVES);
 
+    // Need to be able to write to config.minc >> 6
+    found_prime_m_i.resize((config.m_inc/2) / 32 + 1, 0);
+
     // Has roughly p bits -> find out to 10 merit way more than needed.
     {
         uint32_t stop_x = config.p * 10;
@@ -299,15 +302,13 @@ void SieveData::setup_sieve_data(bool stop) {
     active_m_i.clear();
     unknown_m_i.clear();
     test_i = 0;
-    found_prime_m_i.clear();
+
+    std::fill(found_prime_m_i.begin(), found_prime_m_i.end(), 0);
 
     for (auto& t : next_sieves) {
         t.first = 0;
         t.second.clear();
     }
-
-    // Need to be able to write to config.minc >> 3
-    found_prime_m_i.resize((config.m_inc/2) / 32 + 2, 0);
 
     if (stop)
         return;
@@ -391,7 +392,7 @@ void SieveData::increment_X() {
     testing_x_i++;
     current_testing_x = coprime_X[testing_x_i];
     if (config.verbose >= 3 && current_testing_x % 300 <= 1) {
-        printf("\nMoving to X=%ld\n", current_testing_x);
+        printf("\tMoving to X=%ld\n", current_testing_x);
     }
 
     // okay if it doesn't work
@@ -870,7 +871,7 @@ void run_sieve_thread(void) {
             }
 
             if ((config.verbose + (X <= 2) + (config.m_start <= 1'000'000)) >= 3) {
-                printf("\tGPU Sieve @X=%u with %u/%u (%.0f%%) unknown/active prime=%u"
+                printf("\tCPU Sieve @X=%u with %u/%u (%.0f%%) unknown/active prime=%u"
                        " took %.3f (wheel: %.3f) + %.3f seconds\n",
                        X, unknowns_size, active_size,
                        100.0 * unknowns_size / active_size,
@@ -1097,9 +1098,8 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
     uint64_t m_inc = config.m_inc;
     uint32_t min_X = sieve_data->current_testing_x + 1;
     if (config.verbose >= 2) {
-        printf("\n\n\nMoving to M_start from %ld to %ld\n",
-                m_start, m_start + m_inc);
-        printf("\tQueueing %ld for overflow (X>%ld)",
+        printf("\n\tMoving to M_start from %ld to %ld Queued %lu for overflow(X >%ld)",
+                m_start, m_start + m_inc,
                 sieve_data->active_m_i.size(),
                 sieve_data->current_testing_x);
         if (overflowed.size())
@@ -1126,7 +1126,11 @@ void push_to_overflow_and_increment_M_range(StatsCounters& stats) {
 
 
 
-/** sieve_mtx must be held while calling */
+/**
+ * sieve_mtx COULD be held while calling.
+ * BUT if access is only to add_found_prime_m_i
+ * WE can probably not hold it!
+ * */
 uint32_t process_finished_batch(GPUBatch& batch) {
 
     uint32_t found = 0;
@@ -1218,7 +1222,7 @@ inline void fill_batch(
 }
 
 
-std::atomic<bool> gpu_results_done{false};
+std::atomic<uint8_t> gpu_results_done{0};
 
 /**
  * Starts a CPU thread that handles launching CUDA kernels for primality tests.
@@ -1276,7 +1280,7 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, GpuStatsCounte
             batch.state = GPUBatch::State::DONE;
 
             { // Update holding sieve_mtx
-                sieve_mtx.lock();
+                //sieve_mtx.lock();
                 batch.results_start = high_resolution_clock::now();
                 batch.primes_in_batch = process_finished_batch(batch);
                 batch.results_end = high_resolution_clock::now();
@@ -1295,17 +1299,17 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, GpuStatsCounte
                 stats.d_queued_done += ms_queued_done;
                 stats.d_results += ms_results;
 
-                sieve_mtx.unlock();
+                //sieve_mtx.unlock();
 
-                if (verbose >= 3) {
-                    printf("\tbatch %lu: batch timing fill: %.4f, to gpu: %.4f, "
-                            "gpu: %.4f, processing results: %.4f\n",
-                            processed_batches, ms_fill, ms_queued_full, ms_run, ms_results);
+                if (verbose >= 4) {
+                    printf("\tbatch %lu: batch timing fill: %.5f, "
+                            "gpu: %.5f, processing results: %.5f\n",
+                            processed_batches, ms_fill, ms_run, ms_results);
                 }
             }
 
             batch.unlock();
-            gpu_results_done = true;
+            gpu_results_done++;
             gpu_results_done.notify_one();
         }
 
@@ -1450,8 +1454,8 @@ void run_testing_thread(const struct Config og_config) {
 
             // Wait for the next batch to be done.
             {
-                // Wait for state != false
-                gpu_results_done.wait(false);
+                // Wait for > 0 results.
+                gpu_results_done.wait(0);
 
                 for (size_t i = 0; i < GPU_BATCHES; i++) {
                     GPUBatch& batch = gpu_batches[i];
@@ -1485,10 +1489,9 @@ void run_testing_thread(const struct Config og_config) {
 
                         batch.unlock();
                         batch.state = GPUBatch::State::EMPTY;
+                        gpu_results_done--;
                     }
                 }
-
-                gpu_results_done = false;
             }
         }
 
@@ -1564,12 +1567,13 @@ void signal_callback_handler(int) {
     } else if (ctrl_c_count == 2) {
        cout << endl;
        cout << "Caught 2nd CTRL+C, press one more time to fast exit." << endl;
+       sieve_data->config.verbose++;
     } else {
        cout << endl;
        cout << "Caught 3nd CTRL+C, exit(2) now." << endl;
        cout << endl;
        is_running = false;
-       usleep(25'000); // 25ms to give stats a chance.
+       usleep(125'000); // 125ms to give stats a chance.
        exit(2);
     }
 }
