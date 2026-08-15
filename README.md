@@ -41,7 +41,6 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 
 ## TODO
 
-  * [ ] Check if any open batch is done, if not wait on oldest
   * [ ] Faster sieving
     * AVX
   * [ ] Why does X=12 have twice as many unknowns at X=482?

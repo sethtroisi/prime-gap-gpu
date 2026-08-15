@@ -1166,7 +1166,7 @@ inline void fill_batch(
         const mpz_t &K,
         mpz_t &t,
         const uint32_t x) {
-    assert( batch.state == GPUBatch::State::EMPTY);
+    assert( batch.state == GPUBatch::State::EMPTY );
 
     // Grap some entries from each item in M
 
@@ -1191,6 +1191,8 @@ inline void fill_batch(
             // Happens when primes from last X weren't removed from active_m before sieve started.
             uint32_t m_i = sieve_data->unknown_m_i[j];
             uint32_t index = m_i >> 1;
+
+            // Should happen only with a few primes found in last X.
             if (sieve_data->found_prime_m_i[index >> 5] & (1 << (index & 31)))
                 continue;
 
