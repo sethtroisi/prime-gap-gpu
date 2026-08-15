@@ -39,31 +39,6 @@ $ cd prime-gap-gpu
 valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
 ```
 
-```
-time ./gap_search_gpu -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 36 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
-
-GPU Timings:
-	m processed    : 33,246,754 (169,525/sec)
-	total tests    : 355,364,613 (9.2% prime) (1,812,012/sec)
-	waits on no active_m(10ms) : 88
-	waits on no next_tests(2ms): 11214
-	filling batches: 11.0 seconds (5.6%)
-	waiting filled : 0.8 seconds (0.4%)
-	running on gpu : 314.9 seconds (160.6%)
-	waiting done   : 4.3 seconds (2.2%)
-	results        : 7.9 seconds (4.0%)
-	batch fill %   : 99.3% (% fill), 1.5% (% partial batch)
-
-
-SIEVE Timings:
-	total_m: 200,000,000 (1,021,700/second) 195.8 seconds
-	sieves: 1308
-	finalize_time(6.6%): 4.8 seconds (0.004/sieve)
-	total_time: 73.2 seconds (0.056/sieve)
-	total_active: 2,238,382,250, total_unknown: 362,048,860 (16.2%)
-	active / run: 1,711,301, unknown / run: 276,795
-```
-
 ## TODO
 
   * [ ] Check if any open batch is done, if not wait on oldest

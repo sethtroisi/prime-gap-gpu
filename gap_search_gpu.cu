@@ -455,6 +455,8 @@ class GPUBatch {
         // Result from GPU
         vector<int>  result;
 
+        uint32_t primes_in_batch;
+
         explicit GPUBatch(size_t n) {
             elements = n;
 
@@ -525,76 +527,6 @@ class GPUBatch {
 
         size_t elements;
 };
-
-
-/**
- * Starts a CPU thread that handles launching CUDA kernels for primality tests.
- * Multiple of these threads exist, one for each GPUBatch.
- * communicates with testing_thread via batch (GPUBatch)
- */
-void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
-    try {
-        {
-            std::string name = "GPU(" + std::to_string(runner_num) + ")";
-            pthread_setname_np(pthread_self(), name.c_str());
-        }
-
-#ifdef GPU_TESTING
-        // TODO test changing cudaDeviceScheduleBlockingSync to cudaDeviceScheduleYield or cudaDeviceScheduleSpin
-        typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-        test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
-#endif // GPU_TESTING
-
-        size_t processed_batches = 0;
-        while (is_running && stop_queue <= 1) {
-            batch.wait_for_state_and_lock(GPUBatch::State::READY);
-            if (!is_running || stop_queue > 1) break;
-
-            assert(batch.state == GPUBatch::State::READY);
-            // Verify all active items are all at the front of the batch.
-            auto mid = batch.active.begin();
-            std::advance(mid, batch.i);
-            assert((uint32_t) std::count(batch.active.begin(), mid, 1) == batch.i);
-            assert(std::count(mid,   batch.active.end(), 1) == 0);
-            batch.gpu_start = high_resolution_clock::now();
-            batch.unlock();
-
-            // Run batch on GPU and wait for results to be set
-#ifdef GPU_TESTING
-            if (verbose >= 4)
-                printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
-            runner.run_test(batch.i, batch.z, batch.result);
-            if (verbose >= 4)
-                printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
-#else
-            // Return true for 1/10 results (helps not overflow sieve)
-            for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
-                if (batch.active[gpu_i]) {
-                    batch.result[gpu_i] = (std::rand() % 10) == 1;
-                }
-            }
-#endif // GPU_TESTING
-
-            batch.lock();
-
-            batch.gpu_end = high_resolution_clock::now();
-            processed_batches += 1;
-            batch.state = GPUBatch::State::DONE;
-            batch.state.notify_one();
-            // let CPU thread unlock when it recieves the signal.
-            batch.unlock();
-        }
-
-        if (verbose >= 2) {
-            usleep(runner_num * 10'000); // i * 10ms
-            printf("GPU(%d): Processed %'ld batches\n", runner_num, processed_batches);
-        }
-    } catch (const std::exception &e) {
-        cout << "ERROR in run_gpu_thread" << endl;
-        cout << e.what() << endl;
-        is_running = false;
-    }
-}
 
 
 /**
@@ -997,7 +929,6 @@ class TestingStats {
 
         std::atomic<uint64_t> spot_checked = 0;
 };
-TestingStats stats;
 
 bool overflow_should_run() {
     return !is_running || stop_queue >= 2 || overflowed.size();
@@ -1029,6 +960,7 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
 
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = config.m_inc * config.cpu_fraction;
+        TestingStats stats;
 
         std::unique_lock<std::mutex> lock(overflow_mtx);
         while (is_running && (stop_queue < 2 || overflowed.size() > 0)) {
@@ -1201,6 +1133,7 @@ uint32_t process_finished_batch(GPUBatch& batch) {
     uint32_t m_i = 0;
     for (size_t i = 0; i < GPU_BATCH_SIZE; i++) {
         if (!batch.active[i]) {
+            // Can probably break.
             continue;
         }
         // Verify GPU really did write the result
@@ -1284,6 +1217,111 @@ inline void fill_batch(
     }
 }
 
+
+std::atomic<bool> gpu_results_done{false};
+
+/**
+ * Starts a CPU thread that handles launching CUDA kernels for primality tests.
+ * Multiple of these threads exist, one for each GPUBatch.
+ * communicates with testing_thread via batch (GPUBatch)
+ */
+void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, GpuStatsCounters& stats) {
+    try {
+        {
+            std::string name = "GPU(" + std::to_string(runner_num) + ")";
+            pthread_setname_np(pthread_self(), name.c_str());
+        }
+
+#ifdef GPU_TESTING
+        // TODO test changing cudaDeviceScheduleBlockingSync to cudaDeviceScheduleYield or cudaDeviceScheduleSpin
+        typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
+        test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+#endif // GPU_TESTING
+
+        size_t processed_batches = 0;
+        while (is_running && stop_queue <= 1) {
+            batch.wait_for_state_and_lock(GPUBatch::State::READY);
+            if (!is_running || stop_queue > 1) break;
+
+            assert(batch.state == GPUBatch::State::READY);
+            // Verify all active items are all at the front of the batch.
+            auto mid = batch.active.begin();
+            std::advance(mid, batch.i);
+            assert((uint32_t) std::count(batch.active.begin(), mid, 1) == batch.i);
+            assert(std::count(mid,   batch.active.end(), 1) == 0);
+            batch.gpu_start = high_resolution_clock::now();
+            batch.unlock();
+
+            // Run batch on GPU and wait for results to be set
+#ifdef GPU_TESTING
+            if (verbose >= 4)
+                printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
+            runner.run_test(batch.i, batch.z, batch.result);
+            if (verbose >= 4)
+                printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
+#else
+            // Return true for 1/10 results (helps not overflow sieve)
+            for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
+                if (batch.active[gpu_i]) {
+                    batch.result[gpu_i] = (std::rand() % 10) == 1;
+                }
+            }
+#endif // GPU_TESTING
+
+            batch.lock();
+
+            batch.gpu_end = high_resolution_clock::now();
+            processed_batches += 1;
+
+            batch.state = GPUBatch::State::DONE;
+
+            { // Update holding sieve_mtx
+                sieve_mtx.lock();
+                batch.results_start = high_resolution_clock::now();
+                batch.primes_in_batch = process_finished_batch(batch);
+                batch.results_end = high_resolution_clock::now();
+
+                double ms_fill = duration<double>(batch.fill_end - batch.fill_start).count();
+                double ms_queued_full = duration<double>(batch.gpu_start - batch.fill_end).count();
+                double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
+                double ms_queued_done = duration<double>(batch.results_start - batch.gpu_end).count();
+                double ms_results = duration<double>(batch.results_end - batch.results_start).count();
+
+                stats.batches_run += 1;
+                stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
+                stats.d_fill += ms_fill;
+                stats.d_queued_full += ms_queued_full;
+                stats.d_run += ms_run;
+                stats.d_queued_done += ms_queued_done;
+                stats.d_results += ms_results;
+
+                sieve_mtx.unlock();
+
+                if (verbose >= 3) {
+                    printf("\tbatch %lu: batch timing fill: %.4f, to gpu: %.4f, "
+                            "gpu: %.4f, processing results: %.4f\n",
+                            processed_batches, ms_fill, ms_queued_full, ms_run, ms_results);
+                }
+            }
+
+            batch.unlock();
+            gpu_results_done = true;
+            gpu_results_done.notify_one();
+        }
+
+        if (verbose >= 2) {
+            usleep(runner_num * 10'000); // i * 10ms
+            printf("GPU(%d): Processed %'ld batches\n", runner_num, processed_batches);
+        }
+    } catch (const std::exception &e) {
+        cout << "ERROR in run_gpu_thread" << endl;
+        cout << e.what() << endl;
+        is_running = false;
+    }
+}
+
+
+
 void run_testing_thread(const struct Config og_config) {
     // gap / 2 up to 60 merit
     // TODO add back distance_counts
@@ -1332,7 +1370,6 @@ void run_testing_thread(const struct Config og_config) {
 
         StatsCounters stats(high_resolution_clock::now());
         GpuStatsCounters gpu_stats;
-        gpu_stats.s_per_batch = 1; // lie to avoid issue on first pass.
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
@@ -1344,11 +1381,13 @@ void run_testing_thread(const struct Config og_config) {
 
         std::thread gpu_threads[GPU_BATCHES];
         for(size_t i = 0; i < GPU_BATCHES; i++) {
-            gpu_threads[i] = std::thread(run_gpu_thread, og_config.verbose, i, std::ref(gpu_batches[i]));
+            gpu_threads[i] = std::thread(run_gpu_thread,
+                    i, og_config.verbose,
+                    std::ref(gpu_batches[i]),
+                    std::ref(gpu_stats));
         }
 
         // Silly but that's what life is.
-        std::queue<int> open_gpu;
         uint64_t running_batches = 0;
 
         // Main loop
@@ -1383,12 +1422,11 @@ void run_testing_thread(const struct Config og_config) {
 
                 for (size_t i = 0; i < GPU_BATCHES; i++) {
                     GPUBatch& batch = gpu_batches[i];
-                    batch.lock();
 
                     if (batch.state != GPUBatch::State::EMPTY) {
-                        batch.unlock();
                         continue;
                     }
+                    batch.lock();
 
                     batch.fill_start = high_resolution_clock::now();
                     fill_batch(i, batch, K, t, sieve_data->current_testing_x);
@@ -1397,91 +1435,60 @@ void run_testing_thread(const struct Config og_config) {
                     if (batch.i == 0) {
                         // Leave as empty and unlock
                         batch.unlock();
+                        break;
                     } else {
-                        open_gpu.push(i);
                         running_batches += 1;
 
                         // Mark as ready, unlock, notify gpu thread;
                         //printf("\tMarked GPUBatch(%lu) as READY\n", i);
-                        batch.state = GPUBatch::State::READY;
                         batch.state.notify_one();
                         batch.unlock();
+                        batch.state = GPUBatch::State::READY;
                     }
                 }
             }
 
             // Wait for the next batch to be done.
             {
-                // TODO check if any open batch is done, if not wait on oldest
-                assert(open_gpu.size());
-                int i = open_gpu.front();
-                open_gpu.pop();
+                // Wait for state != false
+                gpu_results_done.wait(false);
 
-                GPUBatch& batch = gpu_batches[i];
-                // Wait for the batch to be Done (unless it's already done)
-                batch.wait_for_state_and_lock(GPUBatch::State::DONE);
-                if (!is_running) {
-                    break;
-                }
+                for (size_t i = 0; i < GPU_BATCHES; i++) {
+                    GPUBatch& batch = gpu_batches[i];
+                    if (batch.state == GPUBatch::State::DONE) {
+                        batch.lock();
 
-                batch.results_start = high_resolution_clock::now();
-                sieve_mtx.lock();
-                running_batches -= 1;
-                uint32_t primes_in_batch = process_finished_batch(batch);
-                SieveData *d = sieve_data.get();
-                stats.s_total_prp_tests += batch.i;
-                stats.s_total_primes += primes_in_batch;
+                        running_batches -= 1;
+                        stats.s_total_prp_tests += batch.i;
+                        stats.s_total_primes += batch.primes_in_batch;
 
-                if (og_config.verbose >= 4) {
-                    printf("\tGot Finished Batch(%d)=%u prime | %lu running, %lu/%lu\n",
-                            i, primes_in_batch,
-                            running_batches, d->test_i, d->unknown_m_i.size());
-                }
+                        sieve_mtx.lock();
+                        uint32_t tested = sieve_data->test_i;
+                        uint32_t total = sieve_data->unknown_m_i.size();
+                        if (og_config.verbose >= 4) {
+                            printf("\tGot Finished Batch(%lu) with %u prime | %lu running, %u/%u\n",
+                                    i, batch.primes_in_batch, running_batches, tested, total);
+                        }
 
-                // if all batches finished then move to next set
-                if (running_batches == 0 && d->test_i && d->test_i == d->unknown_m_i.size()) {
-                    // TODO technically this is less than cpu_fraction at start of X
-                    if (sieve_data->active_m_i.size() < overflow_count) {
-                        push_to_overflow_and_increment_M_range(stats);
-                        if (stop_queue)
-                            stop_queue += 1;
-                    } else {
-                        sieve_data->increment_X();
+                        // if all batches finished then move to next set
+                        if (running_batches == 0 && tested && tested == total) {
+                            // TODO technically this is less than cpu_fraction at start of X
+                            if (sieve_data->active_m_i.size() < overflow_count) {
+                                push_to_overflow_and_increment_M_range(stats);
+                                if (stop_queue)
+                                    stop_queue += 1;
+                            } else {
+                                sieve_data->increment_X();
+                            }
+                        }
+                        sieve_mtx.unlock();
+
+                        batch.unlock();
+                        batch.state = GPUBatch::State::EMPTY;
                     }
                 }
-                sieve_mtx.unlock();
 
-                batch.results_end = high_resolution_clock::now();
-
-                double ms_fill = duration<double>(batch.fill_end - batch.fill_start).count();
-                double ms_queued_full = duration<double>(batch.gpu_start - batch.fill_end).count();
-                double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
-                double ms_queued_done = duration<double>(batch.results_start - batch.gpu_end).count();
-                double ms_results = duration<double>(batch.results_end - batch.results_start).count();
-                double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
-
-                gpu_stats.batches_run += 1;
-                gpu_stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
-                gpu_stats.d_fill += ms_fill;
-                gpu_stats.d_queued_full += ms_queued_full;
-                gpu_stats.d_run += ms_run;
-                gpu_stats.d_queued_done += ms_queued_done;
-                gpu_stats.d_results += ms_results;
-                gpu_stats.s_per_batch = total_t / gpu_stats.batches_run;
-
-                //if (rand() % (1 * 1024) == 0) {
-                if (0) {
-                    // TODO check if gpu times are the same.
-                    // If so that means that they are running side by side which maybe isn't what we want.
-                    printf("CPU: batch timing fill: %.4f, to gpu: %.4f, "
-                            "gpu: %.4f, to cpu: %.4f, processing results: %.4f\n",
-                            ms_fill, ms_queued_full, ms_run, ms_queued_done, ms_results);
-                }
-
-                // Result batch to EMPTY
-                batch.state = GPUBatch::State::EMPTY;
-                batch.state.notify_one();
-                batch.unlock();
+                gpu_results_done = false;
             }
         }
 
@@ -1502,7 +1509,7 @@ void run_testing_thread(const struct Config og_config) {
                     100.0 * stats.s_total_primes / stats.s_total_prp_tests,
                     (uint32_t) (stats.s_total_prp_tests / total_t));
             printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
-                    gpu_stats.batches_run, gpu_stats.s_per_batch);
+                    gpu_stats.batches_run, gpu_stats.batches_run / total_t);
             printf("\twaits on no active_m(5ms) : %ld\n", gpu_stats.wait_not_active);
             printf("\twaits on no next_tests(1ms): %ld\n", gpu_stats.wait_no_next_tests);
             printf("\tfilling batches: %.1f seconds (%.1f%%)\n",

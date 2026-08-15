@@ -86,7 +86,5 @@ class GpuStatsCounters {
         double d_run = 0.0;
         double d_queued_done = 0.0;
         double d_results = 0.0;
-
-        double s_per_batch = 0.0;
 };
 
