@@ -151,14 +151,14 @@ const size_t OPEN_SIEVES = 4;
      *      * takes current list of active M
      *      * sets those as active in GPU
      *      * asks GPU to mark off composites
-     *      * passes list of not-composite numbers (X, <array m>) to GPU
+     *      * passes list of not-composite numbers (X, <vector m>) to GPU
      *      * starts on next X
      *          * This will test 5-15% extra "active" m but that's fine
      *          * Someone (GPU thread?) removes them before starting prime testing
      *
      * gpu_thread: lauches prime testing kernel
      *      * owns the list of active M
-     *      * takes list of (X, <array m>) and tests
+     *      * takes list of (X, <vector m>) and tests
      *      * marks some numbers as not active
      *      * keeps the list
      *
@@ -1280,6 +1280,7 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, GpuStatsCounte
             processed_batches += 1;
 
             batch.state = GPUBatch::State::DONE;
+            batch.state.notify_one();
 
             { // Update holding sieve_mtx
                 //sieve_mtx.lock();
@@ -1379,11 +1380,10 @@ void run_testing_thread(const struct Config og_config) {
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
-        std::array<GPUBatch, GPU_BATCHES> gpu_batches = {
-            GPUBatch(GPU_BATCH_SIZE),
-            GPUBatch(GPU_BATCH_SIZE),
-            GPUBatch(GPU_BATCH_SIZE),
-        };
+        std::deque<GPUBatch> gpu_batches;
+        for (uint32_t i = 0; i < GPU_BATCHES; i++) {
+            gpu_batches.emplace_back(GPU_BATCH_SIZE);
+        }
 
         std::thread gpu_threads[GPU_BATCHES];
         for(size_t i = 0; i < GPU_BATCHES; i++) {
@@ -1447,15 +1447,15 @@ void run_testing_thread(const struct Config og_config) {
 
                         // Mark as ready, unlock, notify gpu thread;
                         //printf("\tMarked GPUBatch(%lu) as READY\n", i);
-                        batch.state.notify_one();
                         batch.unlock();
                         batch.state = GPUBatch::State::READY;
+                        batch.state.notify_one();
                     }
                 }
             }
 
             // Wait for the next batch to be done.
-            {
+            if (running_batches > 0) {
                 // Wait for > 0 results.
                 gpu_results_done.wait(0);
 
@@ -1491,6 +1491,7 @@ void run_testing_thread(const struct Config og_config) {
 
                         batch.unlock();
                         batch.state = GPUBatch::State::EMPTY;
+                        batch.state.notify_one();
                         gpu_results_done--;
                     }
                 }

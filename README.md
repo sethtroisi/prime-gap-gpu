@@ -41,8 +41,16 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 
 ## TODO
 
+  * [ ] GPU batch probably doesn't need lock and can just wait on state.
   * [ ] Faster sieving
     * AVX
+  * [ ] Offload some of overflow back to the GPU
+    * Sieve near each M, have a list of next 20 X offsets
+    * Can 95% reuse runner.run_test
+    * Seems like only a 1-5% overhead on number of primes
+      * Can increase "cpu"-fraction (and hence max-prime)
+    * With less CPU work can do more sieving!
+  * [ ] Do multiple threads for sieves at different X
   * [ ] Why does X=12 have twice as many unknowns at X=482?
 
 
