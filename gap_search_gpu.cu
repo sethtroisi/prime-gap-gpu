@@ -455,10 +455,6 @@ class GPUBatch {
         // Result from GPU
         vector<int>  result;
 
-        // For signaling, must be owned to change state.
-        std::mutex mutex;
-        std::condition_variable cv;
-
         explicit GPUBatch(size_t n) {
             elements = n;
 
@@ -484,7 +480,49 @@ class GPUBatch {
         GPUBatch(const GPUBatch&) = delete;
         GPUBatch& operator=(const GPUBatch&) = delete;
 
+        void lock() {
+            while (1) {
+                // Wait until not 1
+                flag.wait(1, std::memory_order_relaxed);
+
+                // Should be 0 (unlocked) and we can lock
+                int expected = 0;
+                if (flag.compare_exchange_strong(expected, 1,
+                            std::memory_order_acquire, std::memory_order_acquire) ) {
+                    assert( expected == 0 );
+                    assert( flag == 1 );
+                    return;
+                }
+            }
+        }
+
+        void unlock() {
+            assert(flag.load() == 1); // locked (because we own it)
+            flag = 0;
+            flag.notify_one();
+        }
+
+        void wait_for_state_and_lock(State desired) {
+            while (1) {
+                lock();
+                auto current = state.load();
+                if (current == desired || !is_running) {
+                    return;
+                }
+                unlock();
+                // Wait for state change
+                state.wait(current);
+            }
+        }
+
     private:
+        // For signaling, must be owned to change state.
+        /**
+         * :wait(0) -> unlock
+         * -> set to 1 to lock with a check?
+         */
+        std::atomic<int> flag;
+
         size_t elements;
 };
 
@@ -508,14 +546,8 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
 #endif // GPU_TESTING
 
         size_t processed_batches = 0;
-        std::unique_lock lock(batch.mutex, std::defer_lock);
         while (is_running && stop_queue <= 1) {
-            lock.lock();
-            if (batch.state != GPUBatch::State::READY) {
-                batch.cv.wait(lock, [&] { return batch.state == GPUBatch::State::READY
-                        || !is_running || stop_queue > 1; });
-            }
-
+            batch.wait_for_state_and_lock(GPUBatch::State::READY);
             if (!is_running || stop_queue > 1) break;
 
             assert(batch.state == GPUBatch::State::READY);
@@ -525,7 +557,7 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             assert((uint32_t) std::count(batch.active.begin(), mid, 1) == batch.i);
             assert(std::count(mid,   batch.active.end(), 1) == 0);
             batch.gpu_start = high_resolution_clock::now();
-            lock.unlock();
+            batch.unlock();
 
             // Run batch on GPU and wait for results to be set
 #ifdef GPU_TESTING
@@ -543,14 +575,14 @@ void run_gpu_thread(int verbose, int runner_num, GPUBatch& batch) {
             }
 #endif // GPU_TESTING
 
-            lock.lock();
+            batch.lock();
 
             batch.gpu_end = high_resolution_clock::now();
             processed_batches += 1;
             batch.state = GPUBatch::State::DONE;
+            batch.state.notify_one();
             // let CPU thread unlock when it recieves the signal.
-            lock.unlock();
-            batch.cv.notify_one();
+            batch.unlock();
         }
 
         if (verbose >= 2) {
@@ -844,11 +876,6 @@ void run_sieve_thread(void) {
             total_time += sieve_duration_t;
             total_primes += prime;
 
-            if (config.verbose >= 3) {
-                printf("\tsieve(X=%u) ended at %u after %.3f\n",
-                        X, prime, sieve_duration_t);
-            }
-
             lock.lock();
 
             if ( X != sieve_data->current_sieve_x) {
@@ -910,7 +937,6 @@ void run_sieve_thread(void) {
                 }
             }
 
-            // TODO revert
             if ((config.verbose + (X <= 2) + (config.m_start <= 1'000'000)) >= 3) {
                 printf("\tGPU Sieve @X=%u with %u/%u (%.0f%%) unknown/active prime=%u"
                        " took %.3f (wheel: %.3f) + %.3f seconds\n",
@@ -1106,7 +1132,7 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
                     stats.skipped_prev.load(), stats.tested_prev.load());
             uint32_t large = stats.greater_than_min_merit;
             if (large) {
-                printf("\t> %.1f merit: %lu (%lu = %.1f%% bad next_prime)\n",
+                printf("\t> %.1f merit: %u (%lu = %.1f%% bad next_prime)\n",
                         config.min_merit, large, stats.mismatches.load(),
                         100.0 * stats.mismatches.load() / large);
             }
@@ -1245,7 +1271,7 @@ inline void fill_batch(
 
     assert( batch.i <= GPU_BATCH_SIZE);
 
-    if (sieve_data->config.verbose >= 4 && first_test_i < sieve_data->test_i) {
+    if (sieve_data->config.verbose >= 4) {
         printf("\t\tFilled Batch(%u) | X=%u -> [%u, %lu) of %lu\n",
             batch_i, x,
             first_test_i, sieve_data->test_i, sieve_data->unknown_m_i.size());
@@ -1357,10 +1383,10 @@ void run_testing_thread(const struct Config og_config) {
 
                 for (size_t i = 0; i < GPU_BATCHES; i++) {
                     GPUBatch& batch = gpu_batches[i];
-                    batch.mutex.lock();
+                    batch.lock();
 
                     if (batch.state != GPUBatch::State::EMPTY) {
-                        batch.mutex.unlock();
+                        batch.unlock();
                         continue;
                     }
 
@@ -1370,7 +1396,7 @@ void run_testing_thread(const struct Config og_config) {
 
                     if (batch.i == 0) {
                         // Leave as empty and unlock
-                        batch.mutex.unlock();
+                        batch.unlock();
                     } else {
                         open_gpu.push(i);
                         running_batches += 1;
@@ -1378,8 +1404,8 @@ void run_testing_thread(const struct Config og_config) {
                         // Mark as ready, unlock, notify gpu thread;
                         //printf("\tMarked GPUBatch(%lu) as READY\n", i);
                         batch.state = GPUBatch::State::READY;
-                        batch.mutex.unlock();
-                        batch.cv.notify_one();
+                        batch.state.notify_one();
+                        batch.unlock();
                     }
                 }
             }
@@ -1395,15 +1421,10 @@ void run_testing_thread(const struct Config og_config) {
 
                     GPUBatch& batch = gpu_batches[i];
                     // Wait for the batch to be Done (unless it's already done)
-                    std::unique_lock<std::mutex> lock(batch.mutex);
-                    if (batch.state != GPUBatch::State::DONE) {
-                        batch.cv.wait(
-                            lock, [&] { return batch.state == GPUBatch::State::DONE ||!is_running; });
-                    }
-
-                    assert( batch.state == GPUBatch::State::DONE || !is_running );
-                    if (batch.state != GPUBatch::State::DONE)
+                    batch.wait_for_state_and_lock(GPUBatch::State::DONE);
+                    if (!is_running) {
                         break;
+                    }
 
                     batch.results_start = high_resolution_clock::now();
                     sieve_mtx.lock();
@@ -1461,6 +1482,8 @@ void run_testing_thread(const struct Config og_config) {
 
                     // Result batch to EMPTY
                     batch.state = GPUBatch::State::EMPTY;
+                    batch.state.notify_one();
+                    batch.unlock();
                 }
             }
         }
@@ -1507,7 +1530,8 @@ void run_testing_thread(const struct Config og_config) {
             printf("End of testing thread, Joining batch threads\n");
         // Send notifies (to wake up GPU thread and stop conditional waiting)
         for (auto& gpu_batch : gpu_batches) {
-            gpu_batch.cv.notify_all();
+            // Should wait anyone waiting up
+            gpu_batch.state = GPUBatch::State::READY;
         }
         size_t i = 0;
         for (auto & gpu_thread : gpu_threads) {
