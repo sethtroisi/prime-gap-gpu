@@ -79,12 +79,35 @@ class GpuStatsCounters {
         uint64_t batches_partial = 0;
 
         uint64_t wait_not_active = 0;
-        uint64_t wait_no_next_tests = 0;
 
         double d_fill = 0.0;
         double d_queued_full = 0.0;
         double d_run = 0.0;
         double d_queued_done = 0.0;
         double d_results = 0.0;
+
+        void reset() {
+            batches_run = 0;
+            batches_partial = 0;
+
+            wait_not_active = 0;
+
+            d_fill = 0.0;
+            d_queued_full = 0.0;
+            d_run = 0.0;
+            d_queued_done = 0.0;
+            d_results = 0.0;
+        }
+
+        void merge(GpuStatsCounters other) {
+            batches_run     += other.batches_run;
+            batches_partial += other.batches_partial;
+            wait_not_active += other.wait_not_active;
+            d_fill          += other.d_fill;
+            d_queued_full   += other.d_queued_full;
+            d_run           += other.d_run;
+            d_queued_done   += other.d_queued_done;
+            d_results       += other.d_results;
+        }
 };
 

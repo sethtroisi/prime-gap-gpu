@@ -41,6 +41,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 
 ## TODO
 
+  * [ ] Verify mismatches is working
   * [ ] GPU batch probably doesn't need lock and can just wait on state.
   * [ ] Faster sieving
     * AVX
@@ -52,6 +53,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
     * With less CPU work can do more sieving!
   * [ ] Do multiple threads for sieves at different X
   * [ ] Why does X=12 have twice as many unknowns at X=482?
+  * [ ] Log next_prime & num_tests
 
 
 ## TODONE

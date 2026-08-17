@@ -525,9 +525,9 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
     }
 
     int64_t last_m = config.m_start + 1000 * config.m_inc;
-    if (last_m <= 0 || last_m > 1000'000'000'001 ) {
+    if (last_m <= 0 || last_m > 10'000'000'000'001 ) {
         config.valid = 0;
-        cout << "mstart + 1000 * minc must be <= 1e12" << endl;
+        cout << "mstart + 1000 * minc must be <= 1e13" << endl;
     }
 
     if (config.m_inc <= 0) {

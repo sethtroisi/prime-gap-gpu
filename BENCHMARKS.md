@@ -4,6 +4,14 @@
 
 # Benchmarks
 
+## Aug 17
+
+This has five records in 2B ~5-6minutes
+```
+make BITS=256 gap_search_gpu && ./gap_search_gpu -p 151 -d 2310 --mstart 956702000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
+```
+
+
 ## Aug 15
 
 ```
