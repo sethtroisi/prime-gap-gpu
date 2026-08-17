@@ -68,7 +68,44 @@ def get_arg_parser():
         '--show-old', action="store_true",
         help="Show records being replaced")
 
+    parser.add_argument(
+        '--check-possible-records-K', type=str,
+        default=None,
+        help="P#/D e.g. 2221#/2310")
+
     return parser
+
+
+def find_possible_records(args):
+    with sqlite3.connect(args.prime_gaps_db) as conn:
+        K_fmt = args.check_possible_records_K
+        P = int(K_fmt.split('#')[0])
+        D = int(K_fmt.split('/')[1])
+        assert 73 <= P <= 5000
+        assert 1 <= D <= 2 ** 20
+
+        K = gmpy2.primorial(P) // D
+        N = 10 ** 12 * K
+        N_log = gmpy2.log(N)
+        digits = gmpy2.num_digits(N) - 2
+
+
+        possible = conn.execute(
+            'SELECT gapsize,merit,startprime FROM gaps WHERE'
+            ' primedigits>? LIMIT 300', (digits,)).fetchall()
+
+        i = 0
+        for gap, merit, old in possible:
+            t = primegapverify.parse(old)
+            if N > t:
+                continue
+
+            new_merit = gap / N_log
+            if new_merit > 31:
+                break
+
+            i += 1
+            print(f"{i} {gap} merit: {new_merit:.1f} +{new_merit-merit:.2f} over {old}")
 
 
 def describe_found_gaps(gaps):
@@ -77,11 +114,13 @@ def describe_found_gaps(gaps):
     for gap in gaps:
         gaps_by_merit[int(gap[1])].append(gap)
 
+    print()
     print("Found {} gaps  ({:<6} to {:>6})".format(
         len(gaps_by_size), gaps_by_size[0], gaps_by_size[-1]))
     print("      {} merit ({:.3f} to {:.3f})".format(
         " " * len(str(len(gaps_by_size))),
         min(g[1] for g in gaps), max(g[1] for g in gaps)))
+    print()
     for int_merit, items in sorted(gaps_by_merit.items()):
         print("    Merit {:<2} x{:<4} | {}".format(
             int_merit,
@@ -246,8 +285,7 @@ def search_logs(log_files):
         with open(log_fn, "r") as f:
             lines = f.readlines()
 
-        print("Processing {:5d} lines from log: {}".format(
-            len(lines), log_fn))
+        print(f"Processing {len(lines)} lines from log: {log_fn}")
 
         file_match = 0
         for li, line in enumerate(lines):
@@ -299,6 +337,10 @@ if __name__ == "__main__":
 
     assert os.path.exists(args.prime_gaps_db), (
         f"Prime gaps database ({args.prime_gaps_db!r}) doesn't exist")
+
+    if args.check_possible_records_K:
+        find_possible_records(args)
+        sys.exit(0)
 
     neither = True
     if args.logs_directory and os.path.isdir(args.logs_directory):
