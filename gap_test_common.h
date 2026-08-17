@@ -75,6 +75,9 @@ class GpuStatsCounters {
     public:
         GpuStatsCounters() {};
 
+        uint64_t total_prp_tests = 0;
+        uint64_t total_primes = 0;
+
         uint64_t batches_run = 0;
         uint64_t batches_partial = 0;
 
@@ -87,6 +90,9 @@ class GpuStatsCounters {
         double d_results = 0.0;
 
         void reset() {
+            total_prp_tests = 0;
+            total_primes = 0;
+
             batches_run = 0;
             batches_partial = 0;
 
@@ -100,6 +106,8 @@ class GpuStatsCounters {
         }
 
         void merge(GpuStatsCounters other) {
+            total_prp_tests += other.total_prp_tests;
+            total_primes    += other.total_primes;
             batches_run     += other.batches_run;
             batches_partial += other.batches_partial;
             wait_not_active += other.wait_not_active;
