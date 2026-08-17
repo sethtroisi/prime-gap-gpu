@@ -181,9 +181,9 @@ int main(int argc, char* argv[]) {
 }
 
 
-class TestingData {
+class TestData {
     public:
-        TestingData(const struct Config config);
+        TestData(const struct Config config);
 
         /**
          * WAITING -> ACTIVE -> DONE
@@ -260,7 +260,7 @@ class TestingData {
         std::atomic<int> flag;
 };
 
-TestingData::TestingData(const struct Config config)
+TestData::TestData(const struct Config config)
         : stats(high_resolution_clock::now()) {
     m_inc = config.m_inc;
     verbose = config.verbose;
@@ -270,14 +270,14 @@ TestingData::TestingData(const struct Config config)
     reset();
 }
 
-inline void TestingData::add_found_prime_m_i(const uint32_t m_i) {
+inline void TestData::add_found_prime_m_i(const uint32_t m_i) {
     assert(m_i < m_inc);
     // all m_i are even (see sieve) so shift down by 1
     uint32_t t = m_i >> 1;
     found_prime_m_i[t >> 5] |= 1 << (t & 31);
 }
 
-void TestingData::reset() {
+void TestData::reset() {
     std::fill(found_prime_m_i.begin(), found_prime_m_i.end(), 0);
     unknown_m_i.clear();
     test_i = 0;
@@ -324,9 +324,9 @@ class SieveData {
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
         /** sieve_mtx must be held while calling all methods*/
-        void setup_sieve_data(TestingData &testing, bool stop_after);
-        void increment_X(TestingData &testing);
-        bool try_set_testing_data(TestingData &testing);
+        void setup_sieve_data(TestData &testing, bool stop_after);
+        void increment_X(TestData &testing);
+        bool try_set_testing_data(TestData &testing);
 };
 
 
@@ -367,10 +367,10 @@ SieveData::SieveData(const struct Config config) {
 }
 
 /** sieve_mtx, testing.lock() must be held while calling */
-void SieveData::setup_sieve_data(TestingData &testing, bool stop) {
+void SieveData::setup_sieve_data(TestData &testing, bool stop) {
     // Verify stuff
     assert(state == SieveData::State::NEW);
-    assert(testing.state == TestingData::State::WAITING);
+    assert(testing.state == TestData::State::WAITING);
 
     sieve_x_i = 0;
     current_sieve_x = coprime_X[sieve_x_i];
@@ -413,12 +413,12 @@ void remove_vector(vector<uint32_t> &A, const vector<uint32_t> &B) {
 }
 
 /** sieve_mtx, test_data.lock() must be held while calling */
-bool SieveData::try_set_testing_data(TestingData &testing) {
+bool SieveData::try_set_testing_data(TestData &testing) {
     if (this->state == NEW) {
         return false;
     }
 
-    assert( testing.state == TestingData::State::WAITING );
+    assert( testing.state == TestData::State::WAITING );
     assert( testing.unknown_m_i.size() == 0 );
 
     // Look for finished sieve to copy over.
@@ -438,7 +438,7 @@ bool SieveData::try_set_testing_data(TestingData &testing) {
 
             assert(testing.unknown_m_i.size());
 
-            testing.state = TestingData::State::ACTIVE;
+            testing.state = TestData::State::ACTIVE;
             testing.state.notify_one();
 
             test_m_i.clear();
@@ -456,9 +456,9 @@ bool SieveData::try_set_testing_data(TestingData &testing) {
 }
 
 /** sieve_mtx, testing_mtx must be held while calling */
-void SieveData::increment_X(TestingData &testing) {
+void SieveData::increment_X(TestData &testing) {
     // TODO verify no outstanding prime tests
-    assert(testing.state == TestingData::State::DONE);
+    assert(testing.state == TestData::State::DONE);
 
     // Remove any found primes from active_m_i
     remove_vector(active_m_i, testing.found_prime_m_i);
@@ -482,7 +482,7 @@ void SieveData::increment_X(TestingData &testing) {
 std::mutex sieve_mtx;
 std::unique_ptr<SieveData> sieve_data;
 // Don't read from test_data without holding locking it
-std::unique_ptr<TestingData> test_data;
+std::unique_ptr<TestData> test_data;
 
 std::mutex overflow_mtx;
 std::condition_variable overflow_cv;
@@ -1162,7 +1162,7 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
 
 /** sieve_mtx & testing_mtx must be held while calling */
 void push_to_overflow_and_increment_M_range() {
-    assert( test_data->state = TestingData::State::DONE );
+    assert( test_data->state = TestData::State::DONE );
 
     remove_vector(sieve_data->active_m_i, test_data->found_prime_m_i);
 
@@ -1191,7 +1191,7 @@ void push_to_overflow_and_increment_M_range() {
 
     sieve_data->config.m_start += m_inc;
     sieve_data->state = SieveData::State::NEW;
-    test_data->state = TestingData::State::WAITING;
+    test_data->state = TestData::State::WAITING;
 
     sieve_data->setup_sieve_data(*test_data.get(), stop_queue > 0);
 
@@ -1251,7 +1251,7 @@ inline void fill_batch(
     size_t j;
     uint32_t first_test_i = test_data->test_i;
     {
-        assert( test_data->state == TestingData::State::ACTIVE );
+        assert( test_data->state == TestData::State::ACTIVE );
         uint64_t m_start = test_data->m_start;
         uint32_t gpu_i = batch.i;  // [GPU] batch index
         j = test_data->test_i;
@@ -1453,7 +1453,7 @@ void run_testing_thread(const struct Config og_config) {
                     std::ref(gpu_batches[i]));
         }
 
-        // TODO move all of this into GPUBatch && TestingData
+        // TODO move all of this into GPUBatch && TestData
 
         // Silly but that's what life is.
         uint64_t running_batches = 0;
@@ -1470,8 +1470,8 @@ void run_testing_thread(const struct Config og_config) {
             {
                 // TODO make atomic to avoid need to lock here.
                 const auto state = test_data->state.load();
-                if ((state != TestingData::State::ACTIVE)) {
-                    if (state == TestingData::State::WAITING) {
+                if ((state != TestData::State::ACTIVE)) {
+                    if (state == TestData::State::WAITING) {
                         sieve_mtx.lock();
                         test_data->lock();
                         bool set = sieve_data->try_set_testing_data(*test_data.get());
@@ -1555,7 +1555,7 @@ void run_testing_thread(const struct Config og_config) {
 
                         // if all batches finished then move to next set
                         if (running_batches == 0 && tested && tested == total) {
-                            test_data->state = TestingData::State::DONE;
+                            test_data->state = TestData::State::DONE;
 
                             sieve_mtx.lock();
                             // TODO technically this is less than cpu_fraction at start of X
@@ -1714,7 +1714,7 @@ void prime_gap_test(struct Config config) {
     signal(SIGINT, signal_callback_handler);
 
     sieve_data = std::make_unique<SieveData>(config);
-    test_data = std::make_unique<TestingData>(config);
+    test_data = std::make_unique<TestData>(config);
 
     // This has output that's nicer close to the top.
     std::thread testing_thread(run_testing_thread, config);
