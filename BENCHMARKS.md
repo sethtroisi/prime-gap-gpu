@@ -11,6 +11,31 @@ This has five records in 2B ~5-6minutes
 make BITS=256 gap_search_gpu && ./gap_search_gpu -p 151 -d 2310 --mstart 956702000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
 ```
 
+```
+GPU Timings:
+	m processed    : 60,667,012,986 (1,624,255/sec)
+	total tests    : 306,039,585,343 (19.5% prime) (8,193,685/sec)
+	total batches   : 74,904,281 (2005.43378 secs/batch)
+	waits on no active_m(2ms) : 2854823
+	filling batches: 3866.6 seconds (10.4%)
+	waiting filled : 67.8 seconds (0.2%)
+	running on gpu : 75086.9 seconds (201.0%)
+	waiting done   : 0.0 seconds (0.0%)
+	results        : 862.2 seconds (2.3%)
+	batch fill %   : 99.7% (% fill), 0.5% (% partial batch)
+	overflowed      : 908,006,429 (1.5% of ranges)
+
+
+SIEVE Timings:
+	total_m: 291,960,000,000 (7,816,818/second) 37350.2 seconds
+	sieves: 379188 (0.0% early exit)
+	avg prime: 25,815,183
+	finalize_time(19.1%): 5855.8 seconds (0.015/sieve)
+	total_time: 30665.4 seconds (0.081/sieve)
+	total_active: 2,381,805,980,393, total_unknown: 328,017,197,933 (13.77%)
+	active / run: 6,281,332, unknown / run: 865,051
+```
+
 
 ## Aug 15
 

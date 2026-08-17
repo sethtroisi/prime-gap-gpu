@@ -206,6 +206,7 @@ class TestData {
         size_t test_i = 0;
         // TODO Add some asserts on this
         std::atomic<uint32_t> running_batches = 0;
+        std::atomic<uint32_t> active_batches = 0;
 
         /* BITSET of half of m_i where a prime has been found (at any X). */
         vector<uint32_t> found_prime_m_i;
@@ -1303,13 +1304,6 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
 
             { // Fill Batch logic
                 test_data->lock();
-                if (test_data->state != TestData::ACTIVE) {
-                    batch.state = GPUBatch::WAITING;
-                    batch.unlock();
-                    test_data->unlock();
-                    continue;
-                }
-
                 assert( !test_data->unknown_m_i.empty() );
 
                 batch.fill_start = high_resolution_clock::now();
@@ -1322,7 +1316,9 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
                     assert( test_data->test_i == test_data->unknown_m_i.size() );
                     batch.state = GPUBatch::WAITING;
                     batch.unlock();
-                    if (test_data->running_batches == 0) {
+                    test_data->active_batches -= 1;
+                    if (test_data->active_batches == 0) {
+                        assert( test_data->running_batches == 0 );
                         test_data->state = TestData::DONE;
                         test_data->state.notify_all();
                     }
@@ -1510,6 +1506,7 @@ void run_testing_thread(const struct Config og_config) {
                 if (set) {
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
+                        test_data->active_batches += 1;
                         assert( batch.state == GPUBatch::WAITING );
                         batch.state = GPUBatch::EMPTY;
                         batch.state.notify_one();
@@ -1568,9 +1565,7 @@ void run_testing_thread(const struct Config og_config) {
 
         // Merge all stats from gpu_stats
         for (auto& batch : gpu_batches) {
-            // TODO try to get all batches to WAITING before DONE.
-            // assert( batch.state == GPUBatch::WAITING ||
-            //        batch.state == GPUBatch::EMPTY);
+            assert( !is_running || batch.state == GPUBatch::WAITING );
             batch.lock();
             test_data->gpu_stats.merge(batch.stats);
             batch.stats.reset();
