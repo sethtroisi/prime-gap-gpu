@@ -223,6 +223,57 @@ class TestData {
         void add_found_prime_m_i(const uint32_t m_i);
         void full_reset();
 
+        /** Should hold lock during */
+        void maybe_print_stats() {
+            // s_gap_out_of_sieve_prev is actually count of intervals
+            uint64_t c = stats.s_gap_out_of_sieve_prev;
+            bool is_power_print = false;
+            for (uint64_t p = 1000; p <= c; p *= 10) {
+                is_power_print |= (c == p) || (c == 2*p) || (c == 5*p);
+            }
+            if (is_power_print) {
+                print_stats();
+            }
+        }
+
+        /** Should hold lock during */
+        void print_stats() {
+            double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
+            setlocale(LC_NUMERIC, "");
+            printf("\nGPU Timings:\n");
+            printf("\tm               : %'lu (%'u/sec)\n",
+                    stats.s_gap_out_of_sieve_prev, (uint32_t) (stats.s_gap_out_of_sieve_prev / total_t));
+            printf("\tm processed     : %'lu (%'u/sec)\n",
+                    stats.s_tests, (uint32_t) (stats.s_tests / total_t));
+            printf("\ttotal tests     : %'lu (%.1f%% prime) (%'u/sec)\n",
+                    gpu_stats.total_prp_tests,
+                    100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
+                    (uint32_t) (gpu_stats.total_prp_tests / total_t));
+            printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
+                    gpu_stats.batches_run, gpu_stats.batches_run / total_t);
+            printf("\twaits no active_m(2ms) : %ld\n", gpu_stats.wait_not_active);
+            printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
+            printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
+            double total_waiting = gpu_stats.d_queued_full + gpu_stats.d_queued_done;
+            if (100 * total_waiting > total_t) {
+                printf("\twaitfilled+done : %.1f seconds (%.1f%%)\n",
+                        total_waiting, 100 * total_waiting / total_t);
+            }
+            printf("\tresults         : %.1f seconds (%.1f%%)\n",
+                    gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
+            printf("\tbatch fill %%   : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
+                    100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
+                    100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
+            );
+            printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
+                    stats.s_gap_out_of_sieve_next,
+                    100.0 * stats.s_gap_out_of_sieve_next / stats.s_tests);
+            printf("\n");
+            setlocale(LC_NUMERIC, "C");
+        }
+
         void lock() {
             while (1) {
                 // Should be 0 (unlocked) and we can lock
@@ -1585,11 +1636,19 @@ void run_testing_thread(const struct Config og_config) {
                 break;
             }
 
-            { // Done (or !is_running)
-
+            { // Done
                 assert( test_data->state == TestData::DONE );
                 assert( test_data->running_batches == 0 );
                 assert( test_data->test_i == test_data->unknown_m_i.size() );
+
+                // Merge all stats from gpu_stats
+                for (auto& batch : gpu_batches) {
+                    assert( batch.state == GPUBatch::WAITING );
+                    batch.lock();
+                    test_data->gpu_stats.merge(batch.stats);
+                    batch.stats.reset();
+                    batch.unlock();
+                }
 
                 sieve_mtx.lock();
 
@@ -1603,6 +1662,13 @@ void run_testing_thread(const struct Config og_config) {
                         stop_queue += 1;
 
                     test_data->full_reset();
+
+                    // Mark m_inc tests as having been done, maybe print stats
+                    test_data->stats.s_gap_out_of_sieve_prev += og_config.m_inc;
+                    if (og_config.verbose >= 1) {
+                        // Occassionally print some stats
+                        test_data->maybe_print_stats();
+                    }
                 } else {
                     sieve_data->increment_X();
                 }
@@ -1610,6 +1676,7 @@ void run_testing_thread(const struct Config og_config) {
                 test_data->test_i = 0;
                 test_data->unknown_m_i.clear();
                 test_data->state = TestData::WAITING;
+
 
                 sieve_mtx.unlock();
                 test_data->unlock();
@@ -1621,50 +1688,9 @@ void run_testing_thread(const struct Config og_config) {
             mpz_clear(K);
         }
 
-        // Merge all stats from gpu_stats
-        for (auto& batch : gpu_batches) {
-            assert( !is_running || batch.state == GPUBatch::WAITING );
-            batch.lock();
-            test_data->gpu_stats.merge(batch.stats);
-            batch.stats.reset();
-            batch.unlock();
-        }
-
         if (og_config.verbose >= 1) {
             test_data->lock();
-            const auto& stats = test_data->stats;
-            const auto& gpu_stats = test_data->gpu_stats;
-            double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
-            setlocale(LC_NUMERIC, "");
-            printf("\nGPU Timings:\n");
-            printf("\tm processed    : %'lu (%'u/sec)\n",
-                    stats.s_tests, (uint32_t) (stats.s_tests / total_t));
-            printf("\ttotal tests    : %'lu (%.1f%% prime) (%'u/sec)\n",
-                    gpu_stats.total_prp_tests,
-                    100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
-                    (uint32_t) (gpu_stats.total_prp_tests / total_t));
-            printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
-                    gpu_stats.batches_run, gpu_stats.batches_run / total_t);
-            printf("\twaits on no active_m(2ms) : %ld\n", gpu_stats.wait_not_active);
-            printf("\tfilling batches: %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
-            printf("\twaiting filled : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_queued_full, 100 * gpu_stats.d_queued_full / total_t);
-            printf("\trunning on gpu : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
-            printf("\twaiting done   : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_queued_done, 100 * gpu_stats.d_queued_done / total_t);
-            printf("\tresults        : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
-            printf("\tbatch fill %%   : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
-                    100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
-                    100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
-            );
-            printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
-                    stats.s_gap_out_of_sieve_next,
-                    100.0 * stats.s_gap_out_of_sieve_next / stats.s_tests);
-            printf("\n");
-            setlocale(LC_NUMERIC, "C");
+            test_data->print_stats();
             test_data->unlock();
         }
 

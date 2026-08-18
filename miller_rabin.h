@@ -344,7 +344,6 @@ class test_runner_t {
 
           // create a cgbn_error_report for CGBN to report back errors
           CUDA_CHECK(cgbn_error_report_alloc(&report));
-
       }
 
       ~test_runner_t() {
