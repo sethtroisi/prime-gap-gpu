@@ -132,9 +132,6 @@ void K_stats(
 /* Utils */
 size_t count_num_m(long ms, long mi, uint64_t d);
 
-std::pair<vector<bool>, vector<uint32_t>>
-    is_coprime_and_valid_m(const struct Config& config);
-
 double prob_prime_and_stats(const struct Config& config, mpz_t &K);
 
 /* Prime Stuff */

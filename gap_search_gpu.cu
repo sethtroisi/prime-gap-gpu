@@ -78,13 +78,11 @@ const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
  * GPU_BATCH_SIZE is 2^n | best is between 4K and 16K.
  */
 const size_t GPU_BATCHES = 3;
-const size_t GPU_BATCH_SIZE = 4 * 1024;
+const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
 // Always use 1.
 const int ROUNDS = 1;
-
-//const size_t COMBINED_SIEVE_THREADS = 8;
 
 /**
  * Try to have completed this many sieve ahead of the GPU
@@ -124,6 +122,12 @@ const size_t OPEN_SIEVES = 4;
 // 1080Ti - 8K,  4 -> 3060K!
 
 // A100   - 16K, 4 ->
+
+// AUG 2026 BENCHMARKING
+// 151#
+// 1080Ti - 4K  -> 8.22M/sec
+// 1080Ti - 8K  -> 8.36M/sec
+// 1080Ti - 16K -> 8.36M/sec
 
 /********** BENCHMARKING ***********/
 
@@ -317,20 +321,28 @@ class SieveData {
          * this list corresponds to numbers BEFORE current_testing_x
          */
         vector<uint32_t> active_m_i;
-        /* m_i values that need to be tested at current_testing_x */
 
         size_t sieve_x_i = 0;
         size_t current_sieve_x = 0;
+
         /**
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
          */
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
+
         /** sieve_mtx must be held while calling all methods*/
         void setup_sieve_data(bool stop_after);
         void increment_X();
         bool try_set_testing_data(TestData &testing);
+
+    private:
+        vector<bool> is_m_coprime; // Needed for is_coprime_and_valid_m cache.
+        vector<uint32_t> K_primes;
+        vector<uint32_t> D_primes;
+
+        void is_coprime_and_valid_m();
 };
 
 
@@ -339,15 +351,17 @@ SieveData::SieveData(const struct Config config) {
 
     next_sieves.resize(OPEN_SIEVES);
 
+    for (auto prime : get_sieve_primes(config.p)) {
+        if (config.d % prime == 0)
+            D_primes.push_back(prime);
+        else
+            K_primes.push_back(prime);
+    }
+    assert(K_primes.back() == config.p);
+
     // Has roughly p bits -> find out to 10 merit way more than needed.
     {
         uint32_t stop_x = config.p * 10;
-
-        vector<uint32_t> K_primes;
-        for (auto prime : get_sieve_primes(config.p)) {
-            if (config.d % prime != 0)
-                K_primes.push_back(prime);
-        }
 
         // Center is odd, m is odd -> x must be even
         assert(config.d % 2 == 0);
@@ -370,6 +384,53 @@ SieveData::SieveData(const struct Config config) {
     }
 }
 
+/**
+ * Vector of mi, such that gcd(config.m_start + mi, config.d)
+ */
+void SieveData::is_coprime_and_valid_m() {
+    const uint64_t M_start = config.m_start;
+    const uint64_t M_inc = config.m_inc;
+    assert(M_inc < std::numeric_limits<uint32_t>::max());
+
+    const uint32_t D = config.d;
+    assert( D % 2 == 0 );
+
+    active_m_i.clear();
+
+    // M must be coprime to D, removes all evens.
+    assert( M_start % 2 == 0 && M_inc % 2 == 0 );
+    is_m_coprime.resize(M_inc / 2);
+    std::fill(is_m_coprime.begin(), is_m_coprime.end(), 1);
+
+    for (uint32_t p : D_primes) {
+        if (p == 2) continue;
+
+        // mark off any m = m_start + mi that shares factor with d
+        uint64_t first = (p - (M_start % p)) % p;
+        if ((first & 1) == 0) {
+            first += p;
+        }
+        assert((M_start + first) % p == 0);
+        assert((M_start + first) % 2 == 1);
+
+        for (uint64_t mi = first >> 1; mi < is_m_coprime.size(); mi += p) {
+            is_m_coprime[mi] = 0;
+        }
+    }
+
+    // Slower than dynamic bitset, but fast enough
+    size_t count = std::count(is_m_coprime.begin(), is_m_coprime.end(), 1);
+    active_m_i.reserve(count);
+
+    for (uint32_t i = 0; i < is_m_coprime.size(); i++) {
+        if (is_m_coprime[i]) {
+            //assert(gcd(M_start + mi, D) == 1);
+            active_m_i.push_back(2 * i + 1);
+        }
+    }
+}
+
+
 /** sieve_mtx must be held while calling */
 void SieveData::setup_sieve_data(bool stop) {
     // Verify stuff
@@ -388,8 +449,8 @@ void SieveData::setup_sieve_data(bool stop) {
     if (stop)
         return;
 
-    auto temp = is_coprime_and_valid_m(config);
-    active_m_i.swap(temp.second);
+    active_m_i.clear();
+    is_coprime_and_valid_m();
 
     num_valid = active_m_i.size();
     if (config.verbose + (config.m_start <= 1) >= 3)
@@ -736,7 +797,7 @@ void run_sieve_thread(void) {
 
             auto s_start_t = high_resolution_clock::now();
             double wheel_duration_t;
-            const auto m_start = config.m_start;
+            const uint64_t m_start = config.m_start;
 
             assert (D % 2 == 0);
 
@@ -798,15 +859,14 @@ void run_sieve_thread(void) {
 
                 uint64_t m_start_shift = m_start % prime;
                 m_start_shift = prime - m_start_shift;
-                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+                uint64_t mi_0 = ((uint64_t) X * neg_inv_K + m_start_shift) % prime;
 
                 // This requires K odd and m_start even (both checked above)
                 // See 1ba32111 for more details.
                 mi_0 += (mi_0 & 1) ? 0 : prime;
                 mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
-                uint32_t shift = prime;
-                for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                for ( uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
                     composites[t >> 5] |= 1 << (t & 31);
                 }
             }
@@ -816,6 +876,9 @@ void run_sieve_thread(void) {
              *
              * if primes > M_INC_HALF can change loop to single unconditional set statement
              *      This is probably good but isn't relevant for the wide ranges currently being tested.
+             *
+             * Tried loop unrolling composites[t >> 5] |= 1 << (t & 31) in _small loop
+             *      No effect.
              */
 
             uint32_t neg_inv_K;
@@ -834,8 +897,7 @@ void run_sieve_thread(void) {
                     mi_0 += (mi_0 & 1) ? 0 : prime;
                     mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
-                    uint32_t shift = prime;
-                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                    for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
                         composites[t >> 5] |= 1 << (t & 31);
                     }
                 }
@@ -853,8 +915,7 @@ void run_sieve_thread(void) {
                     // See 1ba32111 for more details.
                     mi_0 += (mi_0 & 1) ? 0 : prime;
 
-                    uint32_t shift = prime;
-                    for (uint64_t t = mi_0; t < M_INC_HALF; t += shift) {
+                    for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
                         composites[t >> 5] |= 1 << (t & 31);
                     }
                 }
@@ -893,13 +954,10 @@ void run_sieve_thread(void) {
                 assert( tests != nullptr );
                 assert( tests->empty() );
 
-                if (! active_size ) {
-                    printf("ERROR! No active_m_i at X=%u\n", X);
-                } else {
-                    assert( sieve_data->active_m_i.back() < m_inc );
-                }
+                assert( sieve_data->active_m_i.size() );
+                assert( sieve_data->active_m_i.back() < m_inc );
 
-                // "most" (90%+) should be composite, so this should be < 12.5%
+                // "most" (80-90%+) should be composite, so this should be ~12-20%
                 for (auto m_i : sieve_data->active_m_i) {
                     //assert(m_i < m_inc);
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.

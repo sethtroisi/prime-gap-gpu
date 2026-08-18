@@ -243,48 +243,6 @@ size_t count_num_m(long ms, long mi, uint64_t d) {
 }
 
 
-/**
- * Vector of mi, such that gcd(config.m_start + mi, config.d)
- * Returns a copy, but copy is "fast" compared to cost of computing vector
- */
-pair<vector<bool>, vector<uint32_t>> is_coprime_and_valid_m(const struct Config& config) {
-    const uint64_t M_start = config.m_start;
-    const uint64_t M_inc = config.m_inc;
-    assert(M_inc < std::numeric_limits<uint32_t>::max());
-
-    const uint32_t D = config.d;
-    const vector<uint32_t> P_primes = get_sieve_primes(config.p);
-    assert( P_primes.back() == config.p);
-
-    vector<uint32_t> valid_mi;
-    vector<bool> is_m_coprime(M_inc, 1);
-
-    for (uint32_t p : P_primes) {
-        if (D % p == 0) {
-            // mark off any m = m_start + mi that shares factor with d
-            uint64_t first = (p - (M_start % p)) % p;
-            assert((M_start + first) % p == 0);
-            for (uint64_t mi = first; mi < M_inc; mi += p) {
-                is_m_coprime[mi] = 0;
-            }
-        }
-    }
-
-    // Slower than dynamic bitset, but fast enough
-    size_t count = std::count(is_m_coprime.begin(), is_m_coprime.end(), 1);
-    valid_mi.reserve(count);
-
-    for (uint32_t mi = 0; mi < M_inc; mi++) {
-        if (is_m_coprime[mi]) {
-            assert(gcd(M_start + mi, D) == 1);
-            valid_mi.push_back(mi);
-        }
-    }
-
-    return {is_m_coprime, valid_mi};
-}
-
-
 double prob_prime_and_stats(const struct Config& config, mpz_t &K) {
     int K_digits;
     double K_log;
