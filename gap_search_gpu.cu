@@ -208,7 +208,7 @@ class TestData {
         vector<uint32_t> unknown_m_i;
         // all indexes < test_i have been queued in a GPUBatch
         size_t test_i = 0;
-        // TODO Add some asserts on this
+
         std::atomic<uint32_t> running_batches = 0;
         std::atomic<uint32_t> active_batches = 0;
 
@@ -251,7 +251,9 @@ class TestData {
                     (uint32_t) (gpu_stats.total_prp_tests / total_t));
             printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
                     gpu_stats.batches_run, gpu_stats.batches_run / total_t);
-            printf("\twaits no active_m(2ms) : %ld\n", gpu_stats.wait_not_active);
+            printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
+                    gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
+                    gpu_stats.wait_not_active);
             printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
                     gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
             printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
@@ -380,6 +382,7 @@ class SieveData {
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
          */
+        std::atomic<uint8_t> open_sieves{0};
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
 
@@ -492,6 +495,8 @@ void SieveData::setup_sieve_data(bool stop) {
     testing_x_i = 0;
     current_testing_x = coprime_X[testing_x_i];
 
+    open_sieves = OPEN_SIEVES;
+    open_sieves.notify_all();
     for (auto& t : next_sieves) {
         t.first = 0;
         t.second.clear();
@@ -555,6 +560,8 @@ bool SieveData::try_set_testing_data(TestData &testing) {
 
             test_m_i.clear();
 
+            open_sieves++;
+            open_sieves.notify_all();
             assert(next_sieves[i].first == 0);
             assert(next_sieves[i].second.empty());
             return true;
@@ -820,7 +827,7 @@ void run_sieve_thread(void) {
                 continue;
             }
 
-            // Check is if any OPEN_SIEVES is empty
+            // Check is if how many of OPEN_SIEVES are empty.
             {
                 uint32_t open_slots = 0;
                 for (const auto& t : sieve_data->next_sieves) {
@@ -829,10 +836,11 @@ void run_sieve_thread(void) {
                         assert(t.second.size() == 0);
                     }
                 }
-                if (open_slots == 0) {
+                // TODO delete after checking this assert a few times
+                assert (open_slots == open_sieves);
+                if (open_sieves == 0) {
                     lock.unlock();
-                    // TODO could wait on atomic state
-                    usleep(5'000); // 5ms waiting for tester to need more sieves
+                    open_sieves.wait(0);
                     continue;
                 }
 
@@ -857,11 +865,6 @@ void run_sieve_thread(void) {
             // M(odd) * K(odd) + X  ->  X must be even
             assert (X % 2 == 0);
 
-            // Handle evens, maybe isn't needed?
-            // TODO make sure always index zero.
-            //for(uint32_t m_i = 0; m_i < m_inc; m_i += 2) {
-            //    composites[m_i >> 3] |= 1 << (m_i & 7);
-            //}
             assert(m_start % 2 == 0); // or fix the code
             // Used to mark of each even index by factor of 2, not needed because only odd indexes.
             //std::fill(composites.begin(), composites.end(), 0b1010101);
@@ -1399,7 +1402,6 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
         mpz_init(t);
 
 #ifdef GPU_TESTING
-        // TODO test changing cudaDeviceScheduleBlockingSync to cudaDeviceScheduleYield or cudaDeviceScheduleSpin
         typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
         test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
 #endif // GPU_TESTING
@@ -1621,8 +1623,13 @@ void run_testing_thread(const struct Config og_config) {
                         batch.state.notify_one();
                     }
                 } else {
-                    // TODO instead of spin wait who / what would we wait on SieveData.State = ???
-                    usleep(2'000); // 2ms
+                    // TODO add some timers or something
+                    auto t0 = high_resolution_clock::now();
+                    sieve_data->open_sieves.wait(OPEN_SIEVES);
+                    double wait = duration<double>(high_resolution_clock::now() - t0).count());
+                    test_data->lock();
+                    test_data->gpu_stats.d_wait_not_active += wait;
+                    test_data->unlock();
                 }
 
                 continue;
