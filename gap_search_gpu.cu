@@ -382,7 +382,7 @@ class SieveData {
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
          */
-        std::atomic<uint8_t> open_sieves{0};
+        std::atomic<uint8_t> open_slots{OPEN_SIEVES};
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
 
@@ -403,6 +403,7 @@ class SieveData {
 SieveData::SieveData(const struct Config config) {
     this->config = config;
 
+    open_slots = OPEN_SIEVES;
     next_sieves.resize(OPEN_SIEVES);
 
     for (auto prime : get_sieve_primes(config.p)) {
@@ -495,8 +496,8 @@ void SieveData::setup_sieve_data(bool stop) {
     testing_x_i = 0;
     current_testing_x = coprime_X[testing_x_i];
 
-    open_sieves = OPEN_SIEVES;
-    open_sieves.notify_all();
+    open_slots = OPEN_SIEVES;
+    open_slots.notify_all();
     for (auto& t : next_sieves) {
         t.first = 0;
         t.second.clear();
@@ -560,8 +561,8 @@ bool SieveData::try_set_testing_data(TestData &testing) {
 
             test_m_i.clear();
 
-            open_sieves++;
-            open_sieves.notify_all();
+            open_slots++;
+            open_slots.notify_all();
             assert(next_sieves[i].first == 0);
             assert(next_sieves[i].second.empty());
             return true;
@@ -829,23 +830,14 @@ void run_sieve_thread(void) {
 
             // Check is if how many of OPEN_SIEVES are empty.
             {
-                uint32_t open_slots = 0;
-                for (const auto& t : sieve_data->next_sieves) {
-                    if (t.first == 0) {
-                        open_slots++;
-                        assert(t.second.size() == 0);
-                    }
-                }
-                // TODO delete after checking this assert a few times
-                assert (open_slots == open_sieves);
-                if (open_sieves == 0) {
+                if (sieve_data->open_slots == 0) {
                     lock.unlock();
-                    open_sieves.wait(0);
+                    sieve_data->open_slots.wait(0);
                     continue;
                 }
 
                 // tweak max_p_i if too many open_slots.
-                if (open_slots > 2 && sieve_data->sieve_x_i > 10) {
+                if (sieve_data->open_slots > 2 && sieve_data->sieve_x_i > 10) {
                     max_p_i -= max_p_i / 10;
                 }
             }
@@ -1002,6 +994,8 @@ void run_sieve_thread(void) {
                     if (t.first == 0) {
                         t.first = X;
                         tests = &t.second;
+                        sieve_data->open_slots--;
+                        sieve_data->open_slots.notify_all();
                         break;
                     }
                 }
@@ -1534,10 +1528,6 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
 
 
 void run_testing_thread(const struct Config og_config) {
-    // gap / 2 up to 60 merit
-    // TODO add back distance_counts
-    //uint64_t distance_counts[10000] = {};
-
     try {
         pthread_setname_np(pthread_self(), "CREATE_BATCHES");
         std::ignore = nice(-2); // Increase priority a bit
@@ -1623,10 +1613,13 @@ void run_testing_thread(const struct Config og_config) {
                         batch.state.notify_one();
                     }
                 } else {
-                    // TODO add some timers or something
                     auto t0 = high_resolution_clock::now();
-                    sieve_data->open_sieves.wait(OPEN_SIEVES);
-                    double wait = duration<double>(high_resolution_clock::now() - t0).count());
+                    assert(sieve_data->open_slots == OPEN_SIEVES);
+                    sieve_data->open_slots.wait(OPEN_SIEVES);
+                    double wait = duration<double>(high_resolution_clock::now() - t0).count();
+                    if (og_config.verbose >= 3) {
+                        printf("Wait for sieve: X=%u %.5f seconds\n", test_data->testing_x, wait);
+                    }
                     test_data->lock();
                     test_data->gpu_stats.d_wait_not_active += wait;
                     test_data->unlock();
