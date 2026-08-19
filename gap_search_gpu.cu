@@ -1598,6 +1598,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.lock();
                 test_data->lock();
 
+                uint8_t had_open = sieve_data->open_slots;
                 bool set = sieve_data->try_set_testing_data(*test_data.get());
                 if (!set) test_data->gpu_stats.wait_not_active++;
 
@@ -1605,6 +1606,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.unlock();
 
                 if (set) {
+                    assert( had_open < OPEN_SIEVES );
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
                         test_data->active_batches += 1;
@@ -1614,7 +1616,7 @@ void run_testing_thread(const struct Config og_config) {
                     }
                 } else {
                     auto t0 = high_resolution_clock::now();
-                    assert(sieve_data->open_slots == OPEN_SIEVES);
+                    assert( had_open == OPEN_SIEVES );
                     sieve_data->open_slots.wait(OPEN_SIEVES);
                     double wait = duration<double>(high_resolution_clock::now() - t0).count();
                     if (og_config.verbose >= 3) {
