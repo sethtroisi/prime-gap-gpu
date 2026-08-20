@@ -41,19 +41,21 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 
 ## TODO
 
-  * [ ] Verify mismatches is working
-  * [ ] GPU batch probably doesn't need lock and can just wait on state.
   * [ ] Faster sieving
-    * AVX
+    * [ ] Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
+    * AVX?
+    * Why was a Ryzen 3900x 3x faster at sieving?
   * [ ] Offload some of overflow back to the GPU
     * Sieve near each M, have a list of next 20 X offsets
-    * Can 95% reuse runner.run_test
+    * Reuse `runner.run_test` and `sieve_interval_cpu`
     * Seems like only a 1-5% overhead on number of primes
       * Can increase "cpu"-fraction (and hence max-prime)
-    * With less CPU work can do more sieving!
-  * [ ] Do multiple threads for sieves at different X
+    * Instead of sieving 500 m for 1 active m, sieve 5x more numbers than needed
+      * Converts a lot of L3 access to L1/L2 access.
+
   * [ ] Why does X=12 have twice as many unknowns at X=482?
   * [ ] Log next_prime & num_tests
+  * [ ] Log time in GPU Timings
 
 
 ## TODONE

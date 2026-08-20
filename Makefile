@@ -16,9 +16,9 @@ OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gap_test_common.o
 OUT	= gap_search_gpu
 CC	= g++
-CFLAGS	= $(OPT) -Wall -Werror -Wno-vla
+CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native
 NVCC	= nvcc
-ARCH    = sm_61
+ARCH    = sm_89
 CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
 		  -Xcompiler -Wall \
 	          -Xcompiler -Werror

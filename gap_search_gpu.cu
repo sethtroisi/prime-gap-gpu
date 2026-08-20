@@ -265,7 +265,7 @@ class TestData {
             }
             printf("\tresults         : %.1f seconds (%.1f%%)\n",
                     gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
-            printf("\tbatch fill %%   : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
+            printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
                     100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
                     100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
             );
@@ -799,7 +799,6 @@ void run_sieve_thread(void) {
         vector<uint32_t> d_indexes;
         uint64_t total_m = 0;
         uint64_t total_runs = 0;
-        uint64_t total_early_breaks = 0;
         uint64_t total_active = 0;
         uint64_t total_unknown = 0;
         uint64_t total_primes = 0;
@@ -1060,8 +1059,8 @@ void run_sieve_thread(void) {
             printf("\nSIEVE Timings:\n");
             printf("\ttotal_m: %'lu (%'u/second) %.1f seconds\n",
                     total_m, (uint32_t) (total_m / total_s), total_s);
-            printf("\tsieves: %lu (%.1f%% early exit)\n",
-                    total_runs, 100.0 * total_early_breaks / total_runs);
+            printf("\tsieves: %lu\n",
+                    total_runs);
             printf("\tavg prime: %'lu\n", total_primes / total_runs);
             printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
