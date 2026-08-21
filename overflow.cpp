@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <unistd.h>
@@ -46,6 +47,16 @@ using namespace std::chrono;
 bool overflow_should_run() {
     return !is_running || stop_queue >= 2 || overflowed.size();
 }
+
+/**
+ * Do sieve over X up to ???
+ * Move that to some struct
+ * Create OverflowBatch
+ * Push OverflowBatch occasionally to a GPUBatch
+ * Access to runner.run_test in gpu_testing
+ * Handle prev prime the same way or ???
+ */
+
 
 void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
@@ -74,6 +85,8 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
 
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
+
+        std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
         std::unique_lock<std::mutex> lock(overflow_mtx);
         while (is_running && (stop_queue < 2 || overflowed.size() > 0)) {
@@ -164,8 +177,14 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                         }
 
                         if (merit > min_merit) {
-                            printf("%lu %.3f %lu * %u# / %u - %lu\n",
+                            std::string record = std::format(
+                                    "{} {:.3f} {} * {}# / {} - {}",
                                     gap, merit, m, P, D, prev_gap);
+                            cout << record << endl;
+
+                            lock.lock();
+                            record_stream << record << endl;
+                            lock.unlock();
                         }
                     }
                 }

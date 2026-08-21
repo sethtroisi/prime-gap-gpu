@@ -148,7 +148,7 @@ void TestData::print_stats() {
             100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
             (uint32_t) (gpu_stats.total_prp_tests / total_t));
     printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
-            gpu_stats.batches_run, gpu_stats.batches_run / total_t);
+            gpu_stats.batches_run, total_t / gpu_stats.batches_run);
     printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
             gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
             gpu_stats.wait_not_active);
