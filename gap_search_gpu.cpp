@@ -63,8 +63,17 @@ using std::deque;
 using std::vector;
 using namespace std::chrono;
 
-//************************************************************************
+//*************************************************************************** //
+//**********************************GLOBALS********************************** //
 
+
+
+/**
+ * Try to have completed this many sieve ahead of the GPU
+ * Small extra cost of advance_X filtering for any recent primes
+ * Big saving when X has few unknowns
+ *      -> some ranges have 1/2 as many for some unknown (to seth) reason
+ */
 const size_t OPEN_SIEVES = 4;
 
 // GLOBALS PART 1
@@ -73,15 +82,15 @@ const size_t OPEN_SIEVES = 4;
 /** Shared state between threads */
 std::atomic<bool> is_running;
 std::atomic<uint8_t> stop_queue{0};
-/**
- * is_running = false
-    stop immediately
- * stop_queue
-    * 0: everything normal
-    * 1: continue like normal till increment_m
-    * 2: stop sieve & gpu_tester
-         wait for overflow to finish
- */
+
+// Don't read from sieve_data without holding sieve_mtx
+extern std::mutex sieve_mtx;
+extern std::unique_ptr<SieveData> sieve_data;
+
+extern std::condition_variable overflow_cv;
+
+
+//*************************************************************************** //
 
 
 void prime_gap_test(const struct Config config);
@@ -214,7 +223,7 @@ void TestData::full_reset() {
 SieveData::SieveData(const struct Config config) {
     this->config = config;
 
-    open_slots = OPEN_SIEVES;
+    sieves_ready = 0;
     next_sieves.resize(OPEN_SIEVES);
 
     for (auto prime : get_sieve_primes(config.p)) {
@@ -307,8 +316,8 @@ void SieveData::setup_sieve_data(bool stop) {
     testing_x_i = 0;
     current_testing_x = coprime_X[testing_x_i];
 
-    open_slots = OPEN_SIEVES;
-    open_slots.notify_all();
+    sieves_ready = 0;
+    sieves_ready.notify_all();
     for (auto& t : next_sieves) {
         t.first = 0;
         t.second.clear();
@@ -372,8 +381,8 @@ bool SieveData::try_set_testing_data(TestData &testing) {
 
             test_m_i.clear();
 
-            open_slots++;
-            open_slots.notify_all();
+            sieves_ready--;
+            sieves_ready.notify_all();
             assert(next_sieves[i].first == 0);
             assert(next_sieves[i].second.empty());
             return true;
@@ -566,16 +575,16 @@ void run_sieve_thread(void) {
                 continue;
             }
 
-            // Check is if how many of OPEN_SIEVES are empty.
+            // Check if any empty next_sieves.
             {
-                if (sieve_data->open_slots == 0) {
+                if (sieve_data->sieves_ready == OPEN_SIEVES) {
                     lock.unlock();
-                    sieve_data->open_slots.wait(0);
+                    sieve_data->sieves_ready.wait(OPEN_SIEVES);
                     continue;
                 }
 
-                // tweak max_p_i if too many open_slots.
-                if (sieve_data->open_slots > 2 && sieve_data->sieve_x_i > 10) {
+                // lower max_p_i if not many sieves ready
+                if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
                     max_p_i -= max_p_i / 10;
                 }
             }
@@ -732,8 +741,8 @@ void run_sieve_thread(void) {
                     if (t.first == 0) {
                         t.first = X;
                         tests = &t.second;
-                        sieve_data->open_slots--;
-                        sieve_data->open_slots.notify_all();
+                        sieve_data->sieves_ready++;
+                        sieve_data->sieves_ready.notify_all();
                         break;
                     }
                 }
@@ -826,10 +835,7 @@ bool overflow_should_run() {
 }
 
 
-// Global
-// TODO pass in and make not global
-TestingStats stats;
-void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
+void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats) {
     try {
         {
             char name[16];
@@ -844,7 +850,6 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
         mpz_init(next_p);
         mpz_init(prev_p);
 
-        //StatsCounters stats(high_resolution_clock::now());
         struct Config config = sieve_data->config;
 
         double K_log = calc_log_K(config);
@@ -1085,7 +1090,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.lock();
                 test_data->lock();
 
-                uint8_t had_open = sieve_data->open_slots;
+                uint8_t had_ready = sieve_data->sieves_ready;
                 bool set = sieve_data->try_set_testing_data(*test_data.get());
                 if (!set) test_data->gpu_stats.wait_not_active++;
 
@@ -1093,7 +1098,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.unlock();
 
                 if (set) {
-                    assert( had_open < OPEN_SIEVES );
+                    assert( had_ready > 0 );
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
                         test_data->active_batches += 1;
@@ -1103,8 +1108,8 @@ void run_testing_thread(const struct Config og_config) {
                     }
                 } else {
                     auto t0 = high_resolution_clock::now();
-                    assert( had_open == OPEN_SIEVES );
-                    sieve_data->open_slots.wait(OPEN_SIEVES);
+                    assert( had_ready == 0 );
+                    sieve_data->sieves_ready.wait(0);
                     double wait = duration<double>(high_resolution_clock::now() - t0).count();
                     if (og_config.verbose >= 3) {
                         printf("Wait for sieve: X=%u %.5f seconds\n", test_data->testing_x, wait);
@@ -1275,9 +1280,10 @@ void prime_gap_test(struct Config config) {
     }
     std::thread sieve_thread(run_sieve_thread);
 
+    TestingStats test_stats;
     vector<std::thread> overflow_threads;
     for(size_t i = 0; i < (unsigned)config.cpu_threads; i++) {
-        overflow_threads.emplace_back(run_cpu_overflow_thread, i, std::ref(K));
+        overflow_threads.emplace_back(run_cpu_overflow_thread, i, std::ref(K), std::ref(test_stats));
     }
 
     while (is_running && stop_queue == 0) {

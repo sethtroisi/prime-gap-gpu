@@ -33,14 +33,6 @@ using std::vector;
 using namespace std::chrono;
 
 
-/**
- * Try to have completed this many sieve ahead of the GPU
- * Small extra cost of advance_X filtering for any recent primes
- * Big saving when X has few unknowns
- *      -> some ranges have 1/2 as many for some unknown (to seth) reason
- */
-extern const size_t OPEN_SIEVES;
-
 // GLOBALS PART 1
 
 /** Shared state between threads */
@@ -55,6 +47,17 @@ extern std::atomic<uint8_t> stop_queue;
     * 2: stop sieve & gpu_tester
          wait for overflow to finish
  */
+
+class TestData;
+// Don't read from test_data without holding locking it
+extern std::unique_ptr<TestData> test_data;
+
+extern std::mutex overflow_mtx;
+// deque (double ended queue) avoids a degenerate case of large gap getting stuck
+// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
+extern deque<std::pair<uint64_t, uint32_t>> overflowed;
+// M * K + X which was marked prime by GPU. should be prime 100% of time.
+extern deque<std::pair<uint64_t, uint32_t>> spot_check;
 
 
 class TestData {
@@ -165,8 +168,7 @@ class SieveData {
          * m values that weren't composite from sieve
          * these values will be tested and any primes will be removed from testing_m
          */
-        // TODO try inverting this name to ready_sieves
-        std::atomic<uint8_t> open_slots{0};
+        std::atomic<uint8_t> sieves_ready{0};
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
 
@@ -183,22 +185,6 @@ class SieveData {
         void is_coprime_and_valid_m();
 };
 
-
-// GLOBALS PART 2
-
-// Don't read from sieve_data without holding sieve_mtx
-extern std::mutex sieve_mtx;
-extern std::unique_ptr<SieveData> sieve_data;
-// Don't read from test_data without holding locking it
-extern std::unique_ptr<TestData> test_data;
-
-extern std::mutex overflow_mtx;
-extern std::condition_variable overflow_cv;
-// deque (double ended queue) avoids a degenerate case of large gap getting stuck
-// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
-extern deque<std::pair<uint64_t, uint32_t>> overflowed;
-// M * K + X which was marked prime by GPU. should be prime 100% of time.
-extern deque<std::pair<uint64_t, uint32_t>> spot_check;
 
 class GPUBatch {
     public:

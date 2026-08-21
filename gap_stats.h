@@ -30,12 +30,13 @@
 using std::cout;
 using std::endl;
 using std::vector;
+using namespace std::chrono;
 
 class StatsCounters {
     public:
-        StatsCounters(std::chrono::high_resolution_clock::time_point now) : s_start_t(now) {}
+        StatsCounters(high_resolution_clock::time_point now) : s_start_t(now) {}
 
-        const std::chrono::high_resolution_clock::time_point s_start_t;
+        const high_resolution_clock::time_point s_start_t;
 
         uint64_t  s_tests     = 0;
 
