@@ -806,6 +806,13 @@ bool overflow_should_run() {
     return !is_running || stop_queue >= 2 || overflowed.size();
 }
 
+void signal_stop_to_everyone() {
+    is_running = false;
+    overflow_cv.notify_all();  // wake up all overflow thread
+    sieve_data->sieves_ready = OPEN_SIEVES / 2;
+    sieve_data->sieves_ready.notify_all();
+}
+
 
 void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
@@ -1111,6 +1118,7 @@ void run_testing_thread(const struct Config og_config) {
             }
 
             if (!is_running) {
+                test_data.unlock();
                 break;
             }
 
@@ -1166,6 +1174,13 @@ void run_testing_thread(const struct Config og_config) {
             mpz_clear(K);
         }
 
+        if (!is_running) {
+            for (auto& batch : gpu_batches) {
+                batch.state = GPUBatch::EMPTY;
+                batch.state.notify_one();
+            }
+        }
+
         if (og_config.verbose >= 1) {
             test_data.lock();
             test_data.print_stats();
@@ -1205,14 +1220,13 @@ void signal_callback_handler(int) {
        stop_queue = 1;
     } else if (ctrl_c_count == 2) {
        cout << endl;
-       cout << "Caught 2nd CTRL+C, press one more time to fast exit." << endl;
-       sieve_data->config.verbose++;
+       cout << "Caught 2nd CTRL+C, is_running = false" << endl;
+       is_running = false;
+       signal_stop_to_everyone();
     } else {
        cout << endl;
        cout << "Caught 3nd CTRL+C, exit(2) now." << endl;
-       cout << endl;
-       is_running = false;
-       usleep(125'000); // 125ms to give stats a chance.
+       exit(2);
        exit(2);
     }
 }
@@ -1269,7 +1283,11 @@ void prime_gap_test(struct Config config) {
     }
 
     while (is_running && stop_queue == 0) {
-        usleep(100'000); // 100ms
+        usleep(50'000); // 50ms
+    }
+
+    if (!is_running) {
+        signal_stop_to_everyone();
     }
 
     if (config.verbose >= 3)

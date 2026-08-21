@@ -221,7 +221,10 @@ void run_gpu_thread(int runner_num, int verbose,
         size_t processed_batches = 0;
         while (is_running && stop_queue <= 1) {
             batch.wait_for_state_and_lock(GPUBatch::EMPTY);
-            if (!is_running || stop_queue > 1) break;
+            if (!is_running || stop_queue > 1) {
+                batch.unlock();
+                break;
+            }
 
             assert( batch.state == GPUBatch::EMPTY );
 
@@ -336,6 +339,13 @@ void run_gpu_thread(int runner_num, int verbose,
             usleep(runner_num * 10'000); // i * 10ms
             printf("GPU(%d): Processed %'ld batches\n", runner_num, processed_batches);
         }
+
+        if (!is_running) {
+            // Signal to testing_thread it's time to be done
+            test_data.state = TestData::DONE;
+            test_data.state.notify_all();
+        }
+
     } catch (const std::exception &e) {
         cout << "ERROR in run_gpu_thread" << endl;
         cout << e.what() << endl;
