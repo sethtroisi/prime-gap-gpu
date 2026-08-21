@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "gap_search_gpu.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -41,7 +43,7 @@
 #include <primesieve.hpp>
 
 #include "gap_common.h"
-#include "gap_test_common.h"
+#include "gap_stats.h"
 
 //#define GPU_SIEVE
 // GPU_SIEVE code is in 8ad9efb0
@@ -83,15 +85,6 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 // Always use 1.
 const int ROUNDS = 1;
-
-/**
- * Try to have completed this many sieve ahead of the GPU
- * Small extra cost of advance_X filtering for any recent primes
- * Big saving when X has few unknowns
- *      -> some ranges have 1/2 as many for some unknown (to seth) reason
- */
-const size_t OPEN_SIEVES = 4;
-
 
 
 /********** BENCHMARKING ***********/
@@ -140,7 +133,7 @@ const size_t OPEN_SIEVES = 4;
 
 /** Shared state between threads */
 std::atomic<bool> is_running;
-std::atomic<uint8_t> stop_queue(0);
+std::atomic<uint8_t> stop_queue{0};
 /**
  * is_running = false
     stop immediately
@@ -185,140 +178,80 @@ int main(int argc, char* argv[]) {
 }
 
 
-class TestData {
-    public:
-        TestData(const struct Config config);
-
-        /**
-         * WAITING -> ACTIVE -> DONE
-         *    ^                  |
-         *    |------------------v
-         */
-        enum State { WAITING, ACTIVE, DONE };
-        std::atomic<State> state = WAITING;
-
-        // From Config
-        int verbose;
-        uint32_t m_inc;
-
-        // For current range
-        uint64_t m_start = 0;
-        uint32_t testing_x = 0;
-
-        vector<uint32_t> unknown_m_i;
-        // all indexes < test_i have been queued in a GPUBatch
-        size_t test_i = 0;
-
-        std::atomic<uint32_t> running_batches = 0;
-        std::atomic<uint32_t> active_batches = 0;
-
-        /* BITSET of half of m_i where a prime has been found (at any X). */
-        vector<uint32_t> found_prime_m_i;
-
-        // Stats
-        StatsCounters stats;
-        GpuStatsCounters gpu_stats;
-
-        // Methods
-        void add_found_prime_m_i(const uint32_t m_i);
-        void full_reset();
-
         /** Should hold lock during */
-        void maybe_print_stats() {
-            // s_gap_out_of_sieve_prev is actually count of intervals
-            uint64_t c = stats.s_gap_out_of_sieve_prev;
-            bool is_power_print = false;
-            for (uint64_t p = 1000; p <= c; p *= 10) {
-                is_power_print |= (c == p) || (c == 2*p) || (c == 5*p);
-            }
-            if (is_power_print) {
-                print_stats();
-            }
+void TestData::print_stats() {
+    double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
+    setlocale(LC_NUMERIC, "");
+    printf("\nGPU Timings:\n");
+    printf("\tm               : %'lu (%'u/sec)\n",
+            stats.s_gap_out_of_sieve_prev, (uint32_t) (stats.s_gap_out_of_sieve_prev / total_t));
+    printf("\tm processed     : %'lu (%'u/sec)\n",
+            stats.s_tests, (uint32_t) (stats.s_tests / total_t));
+    printf("\ttotal tests     : %'lu (%.1f%% prime) (%'u/sec)\n",
+            gpu_stats.total_prp_tests,
+            100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
+            (uint32_t) (gpu_stats.total_prp_tests / total_t));
+    printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
+            gpu_stats.batches_run, gpu_stats.batches_run / total_t);
+    printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
+            gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
+            gpu_stats.wait_not_active);
+    printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
+    printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
+    double total_waiting = gpu_stats.d_queued_full + gpu_stats.d_queued_done;
+    if (100 * total_waiting > total_t) {
+        printf("\twaitfilled+done : %.1f seconds (%.1f%%)\n",
+                total_waiting, 100 * total_waiting / total_t);
+    }
+    printf("\tresults         : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
+    printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
+            100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
+            100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
+    );
+    printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
+            stats.s_gap_out_of_sieve_next,
+            100.0 * stats.s_gap_out_of_sieve_next / stats.s_tests);
+    printf("\n");
+    setlocale(LC_NUMERIC, "C");
+}
+
+void TestData::lock() {
+    while (1) {
+        // Should be 0 (unlocked) and we can lock
+        int expected = 0;
+        if (flag.compare_exchange_strong(expected, 1,
+                    std::memory_order_acquire, std::memory_order_acquire) ) {
+            assert( expected == 0 );
+            assert( flag == 1 );
+            return;
         }
 
-        /** Should hold lock during */
-        void print_stats() {
-            double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
-            setlocale(LC_NUMERIC, "");
-            printf("\nGPU Timings:\n");
-            printf("\tm               : %'lu (%'u/sec)\n",
-                    stats.s_gap_out_of_sieve_prev, (uint32_t) (stats.s_gap_out_of_sieve_prev / total_t));
-            printf("\tm processed     : %'lu (%'u/sec)\n",
-                    stats.s_tests, (uint32_t) (stats.s_tests / total_t));
-            printf("\ttotal tests     : %'lu (%.1f%% prime) (%'u/sec)\n",
-                    gpu_stats.total_prp_tests,
-                    100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
-                    (uint32_t) (gpu_stats.total_prp_tests / total_t));
-            printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
-                    gpu_stats.batches_run, gpu_stats.batches_run / total_t);
-            printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
-                    gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
-                    gpu_stats.wait_not_active);
-            printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
-            printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
-            double total_waiting = gpu_stats.d_queued_full + gpu_stats.d_queued_done;
-            if (100 * total_waiting > total_t) {
-                printf("\twaitfilled+done : %.1f seconds (%.1f%%)\n",
-                        total_waiting, 100 * total_waiting / total_t);
-            }
-            printf("\tresults         : %.1f seconds (%.1f%%)\n",
-                    gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
-            printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
-                    100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
-                    100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
-            );
-            printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
-                    stats.s_gap_out_of_sieve_next,
-                    100.0 * stats.s_gap_out_of_sieve_next / stats.s_tests);
-            printf("\n");
-            setlocale(LC_NUMERIC, "C");
+        assert(expected == 1);
+        flag.wait(expected, std::memory_order_relaxed);
+    }
+}
+
+void TestData::unlock() {
+    assert(flag.load() == 1); // locked (because we own it)
+    flag = 0;
+    flag.notify_one();
+}
+
+void TestData::wait_for_state_and_lock(State desired) {
+    while (1) {
+        lock();
+        auto current = state.load();
+        if (current == desired || !is_running) {
+            return;
         }
-
-        void lock() {
-            while (1) {
-                // Should be 0 (unlocked) and we can lock
-                int expected = 0;
-                if (flag.compare_exchange_strong(expected, 1,
-                            std::memory_order_acquire, std::memory_order_acquire) ) {
-                    assert( expected == 0 );
-                    assert( flag == 1 );
-                    return;
-                }
-
-                assert(expected == 1);
-                flag.wait(expected, std::memory_order_relaxed);
-            }
-        }
-
-        void unlock() {
-            assert(flag.load() == 1); // locked (because we own it)
-            flag = 0;
-            flag.notify_one();
-        }
-
-        void wait_for_state_and_lock(State desired) {
-            while (1) {
-                lock();
-                auto current = state.load();
-                if (current == desired || !is_running) {
-                    return;
-                }
-                unlock();
-                // Wait for state change
-                state.wait(current);
-            }
-        }
-
-    private:
-        // For signaling, must be owned to change state.
-        /**
-         * :wait(0) -> unlock
-         * -> set to 1 to lock with a check?
-         */
-        std::atomic<int> flag;
-};
+        unlock();
+        // Wait for state change
+        state.wait(current);
+    }
+}
 
 TestData::TestData(const struct Config config)
         : stats(high_resolution_clock::now()) {
@@ -344,60 +277,6 @@ inline void TestData::add_found_prime_m_i(const uint32_t m_i) {
     uint32_t t = m_i >> 1;
     found_prime_m_i[t >> 5] |= 1 << (t & 31);
 }
-
-
-
-class SieveData {
-    public:
-        SieveData(const struct Config config);
-
-        /**
-         * NEW -> ACTIVE -> FINAL -> DONE
-         * FIRST_SIEVE => Running the first sieve
-         * FINAL => Don't sieve any more, just finish outstanding prime tests.
-         *      would be kinda nice to start on next sieves but IDK how to avoid that delay.
-         */
-        enum State { NEW, FIRST_SIEVE, ACTIVE, FINAL, DONE };
-        State state = NEW;
-
-        struct Config config;
-
-        /* Number of valid m_i for [m_start, m_start + m_inc). */
-        size_t num_valid = 0;
-
-        vector<uint32_t> coprime_X;
-
-        size_t testing_x_i = 0;
-        size_t current_testing_x = 0;
-        /**
-         * m_i values without a prime
-         * this list corresponds to numbers BEFORE current_testing_x
-         */
-        vector<uint32_t> active_m_i;
-
-        size_t sieve_x_i = 0;
-        size_t current_sieve_x = 0;
-
-        /**
-         * m values that weren't composite from sieve
-         * these values will be tested and any primes will be removed from testing_m
-         */
-        std::atomic<uint8_t> open_slots{OPEN_SIEVES};
-        vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
-
-
-        /** sieve_mtx must be held while calling all methods*/
-        void setup_sieve_data(bool stop_after);
-        void increment_X();
-        bool try_set_testing_data(TestData &testing);
-
-    private:
-        vector<bool> is_m_coprime; // Needed for is_coprime_and_valid_m cache.
-        vector<uint32_t> K_primes;
-        vector<uint32_t> D_primes;
-
-        void is_coprime_and_valid_m();
-};
 
 
 SieveData::SieveData(const struct Config config) {
@@ -599,111 +478,40 @@ deque<std::pair<uint64_t, uint32_t>> overflowed;
 // M * K + X which was marked prime by GPU. should be prime 100% of time.
 deque<std::pair<uint64_t, uint32_t>> spot_check;
 
-class GPUBatch {
-    public:
-        enum State : uint8_t { WAITING, EMPTY, RUNNING, DONE };
-        std::atomic<State> state = WAITING;
-
-        GpuStatsCounters stats;
-
-        // Used in debugging Batch Timing.
-        time_point<high_resolution_clock> fill_start;
-        time_point<high_resolution_clock> fill_end;
-        time_point<high_resolution_clock> gpu_start;
-        time_point<high_resolution_clock> gpu_end;
-        time_point<high_resolution_clock> results_start;
-        time_point<high_resolution_clock> results_end;
-
-        // current index;
-        size_t i;
-
-        // testing 'm * K + x'
-        uint32_t x;
-
-        // number to check if prime
-        vector<mpz_t*> z;
-        // XXX: This is an ugly hack because you can't create mpz_t vector easily
-        mpz_t *z_array;
-        // m_i corresponding to z
-        vector<uint32_t> m_i;
-
-        // If z[i] should be tested
-        vector<uint8_t>  active;
-        // Result from GPU
-        vector<int>  result;
-
-        uint32_t primes_in_batch;
-
-        explicit GPUBatch(size_t n) {
-            elements = n;
-
-            z_array = (mpz_t *) malloc(n * sizeof(mpz_t));
-            for (size_t i = 0; i < n; i++) {
-                mpz_init(z_array[i]);
-                z.push_back(&z_array[i]);
-            }
-
-            m_i.resize(n, 0);
-            active.resize(n, 0);
-            result.resize(n, -1);
+void GPUBatch::lock() {
+    while (1) {
+        int expected = 0;
+        if (flag.compare_exchange_strong(expected, 1,
+                    std::memory_order_acquire, std::memory_order_acquire) ) {
+            assert( expected == 0 );
+            assert( flag == 1 );
+            return;
         }
 
-        ~GPUBatch() {
-            //cout << "~GPUBatch" << endl;
-            for (size_t i = 0; i < elements; i++) {
-                mpz_clear(z_array[i]);
-            }
-            free(z_array);
+        assert(expected == 1);
+        // Wait until not 1
+        flag.wait(expected, std::memory_order_relaxed);
+    }
+}
+
+void GPUBatch::unlock() {
+    assert(flag.load() == 1); // locked (because we own it)
+    flag = 0;
+    flag.notify_one();
+}
+
+void GPUBatch::wait_for_state_and_lock(State desired) {
+    while (1) {
+        lock();
+        auto current = state.load();
+        if (current == desired || !is_running) {
+            return;
         }
-
-        GPUBatch(const GPUBatch&) = delete;
-        GPUBatch& operator=(const GPUBatch&) = delete;
-
-        void lock() {
-            while (1) {
-                int expected = 0;
-                if (flag.compare_exchange_strong(expected, 1,
-                            std::memory_order_acquire, std::memory_order_acquire) ) {
-                    assert( expected == 0 );
-                    assert( flag == 1 );
-                    return;
-                }
-
-                assert(expected == 1);
-                // Wait until not 1
-                flag.wait(expected, std::memory_order_relaxed);
-            }
-        }
-
-        void unlock() {
-            assert(flag.load() == 1); // locked (because we own it)
-            flag = 0;
-            flag.notify_one();
-        }
-
-        void wait_for_state_and_lock(State desired) {
-            while (1) {
-                lock();
-                auto current = state.load();
-                if (current == desired || !is_running) {
-                    return;
-                }
-                unlock();
-                // Wait for state change
-                state.wait(current);
-            }
-        }
-
-    private:
-        // For signaling, must be owned to change state.
-        /**
-         * :wait(0) -> unlock
-         * -> set to 1 to lock with a check?
-         */
-        std::atomic<int> flag;
-
-        size_t elements;
-};
+        unlock();
+        // Wait for state change
+        state.wait(current);
+    }
+}
 
 
 /**
@@ -1082,22 +890,13 @@ void run_sieve_thread(void) {
 }
 
 
-class TestingStats {
-    public:
-        std::atomic<uint64_t> tested = 0;
-        std::atomic<uint64_t> skipped_prev = 0;
-        std::atomic<uint64_t> tested_prev = 0;
-        std::atomic<uint64_t> greater_than_min_merit = 0;
-        std::atomic<uint64_t> mismatches = 0;
-
-        std::atomic<uint64_t> spot_checked = 0;
-};
-
 bool overflow_should_run() {
     return !is_running || stop_queue >= 2 || overflowed.size();
 }
 
+
 // Global
+// TODO pass in and make not global
 TestingStats stats;
 void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
     try {
