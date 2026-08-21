@@ -56,6 +56,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
   * [ ] Why does X=12 have twice as many unknowns at X=482?
   * [ ] Log next_prime & num_tests
   * [ ] Log time in GPU Timings
+  * [ ] Add an assert on GPU_BITS size
 
 
 ## TODONE

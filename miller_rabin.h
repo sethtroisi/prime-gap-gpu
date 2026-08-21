@@ -22,6 +22,8 @@ IN THE SOFTWARE.
 
 ***/
 
+#pragma once
+
 #include <cassert>
 #include <stdio.h>
 #include <stdint.h>

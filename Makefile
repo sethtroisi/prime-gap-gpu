@@ -13,7 +13,7 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o
+OBJS	= gap_common.o gpu_testing.o
 OUT	= gap_search_gpu
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native
@@ -25,24 +25,24 @@ CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
 
 BITS    = 1024
 
-LDFLAGS	= -lgmp -lprimesieve
+LDFLAGS	= -lgmp -lprimesieve -lcudart
 # Need for local gmp / primesieve
 #LDFLAGS+= -L /usr/local/lib
 
 all: $(OUT)
 
 sieve_small.o: sieve_small.cu
-	nvcc -o $@ -x cu -c $(filter-out %.h, $^) \
-		$(CUDA_FLAGS) $(filter-out -fopenmp, $(LDFLAGS))
+	nvcc $^ -o $@ -c $(CUDA_FLAGS)
+
+gpu_testing.o: gpu_testing.cu
+	nvcc $^ -o $@ -c -DGPU_BITS=$(BITS) $(CUDA_FLAGS) -I../CGBN/include
 
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
-gap_search_gpu: gap_search_gpu.cu $(OBJS) #sieve_small.o
-	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
-		$(CUDA_FLAGS) \
-		-I../CGBN/include \
-		$(LDFLAGS)
+
+gap_search_gpu: gap_search_gpu.cpp $(OBJS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 .PHONY: all clean
 
