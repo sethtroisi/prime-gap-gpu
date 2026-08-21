@@ -47,6 +47,7 @@
 
 #include "gpu_testing.h"
 
+
 //#define GPU_SIEVE
 // GPU_SIEVE code is in 8ad9efb0
 
@@ -1231,40 +1232,15 @@ void signal_callback_handler(int) {
 void prime_gap_test(struct Config config) {
     // Setup test runner
     printf("\n");
-#ifdef GPU_TESTING
-    printf("TESTING PRIMES ON GPU\n");
-    printf("BITS=%d\n", BITS);
-    printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
-    printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
-    printf("GPU_BATCHES=%lu\n", GPU_BATCHES);
-#endif // GPU_TESTING
 
     // Turn into static assert
     assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 || GPU_BATCH_SIZE == 4096 ||
             GPU_BATCH_SIZE == 8192 || GPU_BATCH_SIZE ==16384 || GPU_BATCH_SIZE ==32768 );
 
     mpz_t K;
-    {
-        init_K(config, K);
+    init_K(config, K);
 
-#ifdef GPU
-        // +4 is just is personal safety blanket buffer.
-        size_t N_bits = mpz_sizeinbase(K, 2) + log2(config.m_start + 1000ul * config.m_inc) + 4;
-
-        // P# roughly 349, 709, 1063, 1447
-        for (size_t bits : {512, 1024, 1536, 2048, 3036, 4096}) {
-            if (N_bits <= bits) {
-                if (bits < BITS) {
-                    printf("\nFASTER WITH `make gap_search_gpu BITS=%ld` (may require `make clean`)\n\n", bits);
-                    exit(1);
-                }
-                break;
-            }
-        }
-        assert( (N_bits + 1) < BITS ); // See last debug line.
-        assert( BITS <= (1 << (2 * WINDOW_BITS)) );
-#endif  // GPU
-    }
+    gpu_state_and_checks(K, config.m_start + 1000 * config.m_inc);
 
     is_running = true;
     stop_queue = 0;

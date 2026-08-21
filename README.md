@@ -16,16 +16,14 @@ TBD
 In general this is going to be easy under Ubuntu 24.04 or later
 
 ```bash
-TODO trim
-TODO cuda
 $ sudo apt install libgmp10 libgmp-dev
-$ sudo apt install mercurial build-essential automake autoconf bison make libtool texinfo m4
+$ sudo apt install build-essential automake autoconf make
+# CUDA is required but I'm not sure what apt install that is
 ```
 
 ```
-$ sudo apt install libmpfr-dev libmpc-dev libbenchmark-dev
-
-$ python -m pip install --user gmpy2 primegapverify
+$ sudo apt install libmpfr-dev libmpc-dev
+$ python -m pip install --user gmpy2
 ```
 
 ```
@@ -54,9 +52,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
       * Converts a lot of L3 access to L1/L2 access.
 
   * [ ] Why does X=12 have twice as many unknowns at X=482?
-  * [ ] Log next_prime & num_tests
   * [ ] Log time in GPU Timings
-  * [ ] Add an assert on GPU_BITS size
 
 
 ## TODONE

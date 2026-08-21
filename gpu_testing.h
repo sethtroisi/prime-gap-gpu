@@ -23,4 +23,7 @@
 extern const size_t GPU_BATCHES;
 extern const size_t GPU_BATCH_SIZE;
 
-void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K_in);
+void run_gpu_thread(int runner_num, int verbose,
+                    GPUBatch& batch, const mpz_t &K_in);
+
+void gpu_state_and_checks(const mpz_t &K_in, const uint64_t m_end);

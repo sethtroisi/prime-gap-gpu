@@ -340,3 +340,37 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
         is_running = false;
     }
 }
+
+void gpu_state_and_checks(const mpz_t &K_in, const uint64_t m_end) {
+    static_assert( GPU_BATCH_SIZE == 1024 || GPU_BATCH_SIZE == 2048 ||
+                   GPU_BATCH_SIZE == 4096 || GPU_BATCH_SIZE == 8192 ||
+                   GPU_BATCH_SIZE ==16384 || GPU_BATCH_SIZE ==32768 );
+
+#ifdef GPU_TESTING
+    printf("TESTING PRIMES ON GPU\n");
+    printf("BITS=%d\n", BITS);
+    printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
+    printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
+    printf("GPU_BATCHES=%lu\n", GPU_BATCHES);
+
+    // +4 is just is personal safety blanket buffer.
+    size_t N_bits = mpz_sizeinbase(K_in, 2) + log2(m_end) + 4;
+
+    // P# roughly 349, 709, 1063, 1447
+    for (size_t bits : {512, 1024, 1536, 2048, 3036, 4096}) {
+        if (N_bits <= bits) {
+            if (bits < BITS) {
+                printf("\nFASTER WITH `make gap_search_gpu BITS=%ld` (may require `make clean`)\n\n", bits);
+                exit(1);
+            }
+            break;
+        }
+    }
+    if (N_bits >= BITS) {
+        printf("\nERROR: GPU Compiled with BITS=%d but m*K has up to %lu bits\n\n",
+                BITS, N_bits);
+        exit(1);
+    }
+    assert( BITS <= (1 << (2 * WINDOW_BITS)) );
+#endif // GPU_TESTING
+}
