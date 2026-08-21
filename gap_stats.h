@@ -65,6 +65,9 @@ class TestingStats {
         std::atomic<uint64_t> skipped_prev = 0;
         std::atomic<uint64_t> tested_prev = 0;
         std::atomic<uint64_t> greater_than_min_merit = 0;
+        // GAP MISMATCH where next_prime had pow(2, n-1, n) == 1
+        std::atomic<uint64_t> pseudoprimes = 0;
+        // GAP MISMATCH where ^ is NOT TRUE.
         std::atomic<uint64_t> mismatches = 0;
 
         std::atomic<uint64_t> spot_checked = 0;

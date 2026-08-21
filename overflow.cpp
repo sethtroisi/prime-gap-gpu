@@ -189,11 +189,9 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
         }
 
         // Pre-allocated
-        mpz_t K, center, next_p, prev_p;
+        mpz_t K, center, next_p, prev_p, tmp, tmp2;
         mpz_init_set(K, K_in);
-        mpz_init(center);
-        mpz_init(next_p);
-        mpz_init(prev_p);
+        mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
         vector<uint8_t> composite_tmp;
 
 
@@ -277,7 +275,7 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                 } else {
                     next_gap = next_prime_distance(
                             m, min_x,
-                            K, center, next_p,
+                            K, center, tmp,
                             composite_tmp);
                 }
                 double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
@@ -301,12 +299,21 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                         mpz_sub(next_p, next_p, prev_p);
                         uint64_t test_gap = mpz_get_ui(next_p);
                         if (test_gap != gap) {
-                            stats.mismatches++;
-                            printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u - %lu "
-                                    "(probably because only 1 miller-rabin test)\n",
-                                    test_gap, gap, m, P, D, prev_gap);
+                            // These numbers are marked "prime" by GPU because we only do 1 round.
+                            mpz_sub_ui(tmp, next_p, 1);
+                            mpz_set_ui(tmp2, 2);
+                            // Check if mismatch is Fermat pseudoprime base 2 <=> 2^(np-1) % np = 1
+                            mpz_powm(tmp, tmp2, tmp, next_p);
+                            if ( mpz_cmp_ui(tmp, 1) == 0) {
+                                stats.pseudoprimes++;
+                                printf("\tFermat Pseuodprime: %lu * %u# / %u + %lu\n",
+                                        m, P, D, test_gap - prev_gap);
+                            } else {
+                                stats.mismatches++;
+                                printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u + %lu\n",
+                                        test_gap, gap, m, P, D, test_gap - prev_gap);
+                            }
                             merit = test_gap / (K_log + log(m));
-                            // TODO verify that powm(2, N-1, N) = 1 and record differently
                         }
 
                         if (merit > min_merit) {
@@ -336,9 +343,11 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                     stats.skipped_prev.load(), stats.tested_prev.load());
             uint32_t large = stats.greater_than_min_merit;
             if (large) {
-                printf("\t> %.1f merit: %u (%lu = %.1f%% bad next_prime)\n",
-                        min_merit, large, stats.mismatches.load(),
-                        100.0 * stats.mismatches.load() / large);
+                printf("\t> %.1f merit: %u\n", min_merit, large);
+                if (stats.pseudoprimes || stats.mismatches) {
+                    printf("\tMismatches | Fermat: %lu, Other: %lu\n",
+                            stats.pseudoprimes.load(), stats.mismatches.load());
+                }
             }
             printf("\n");
         }
@@ -349,9 +358,7 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
         }
 
         mpz_clear(K);
-        mpz_clear(center);
-        mpz_clear(next_p);
-        mpz_clear(prev_p);
+        mpz_clears(center, next_p, prev_p, tmp, tmp2, NULL);
     } catch (const std::exception &e) {
         cout << "ERROR in run_cpu_overflow_thread" << endl;
         cout << e.what() << endl;
