@@ -87,6 +87,7 @@ std::atomic<uint8_t> stop_queue{0};
 extern std::mutex sieve_mtx;
 extern std::unique_ptr<SieveData> sieve_data;
 
+
 extern std::condition_variable overflow_cv;
 
 
@@ -408,8 +409,6 @@ void SieveData::increment_X() {
 // Don't read from sieve_data without holding sieve_mtx
 std::mutex sieve_mtx;
 std::unique_ptr<SieveData> sieve_data;
-// Don't read from test_data without holding locking it
-std::unique_ptr<TestData> test_data;
 
 std::mutex overflow_mtx;
 std::condition_variable overflow_cv;
@@ -987,32 +986,31 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats)
 
 
 /** sieve_mtx must be held while calling */
-void push_to_overflow_and_increment_M_range() {
-    assert( test_data->state == TestData::DONE );
+void SieveData::push_to_overflow_and_increment_M_range() {
+    // assert( test_data->state == TestData::DONE );
 
-    const auto& config = sieve_data->config;
     uint64_t m_start = config.m_start;
     uint64_t m_inc = config.m_inc;
-    uint32_t min_X = sieve_data->current_testing_x + 1;
+    uint32_t min_X = current_testing_x + 1;
     if (config.verbose >= 2) {
         printf("\n\tMoving to M_start from %ld to %ld Queued %lu for overflow(X >%ld)",
                 m_start, m_start + m_inc,
-                sieve_data->active_m_i.size(),
-                sieve_data->current_testing_x);
+                active_m_i.size(),
+                current_testing_x);
         if (overflowed.size())
             printf(" (current: %lu)", overflowed.size());
         printf("\n");
     }
 
     std::lock_guard lock(overflow_mtx);
-    for (uint32_t m_i : sieve_data->active_m_i) {
+    for (uint32_t m_i : active_m_i) {
         overflowed.emplace_back(m_start + m_i, min_X);
     }
 
-    sieve_data->config.m_start += m_inc;
-    sieve_data->state = SieveData::NEW;
+    config.m_start += m_inc;
+    state = SieveData::NEW;
 
-    sieve_data->setup_sieve_data(stop_queue > 0);
+    setup_sieve_data(stop_queue > 0);
 
     // CPU sieving thread will start if unlocked and notified
     overflow_cv.notify_all();
@@ -1065,12 +1063,14 @@ void run_testing_thread(const struct Config og_config) {
         for (uint32_t i = 0; i < GPU_BATCHES; i++) {
             gpu_batches.emplace_back(GPU_BATCH_SIZE);
         }
+        TestData test_data{og_config};
 
         std::thread gpu_threads[GPU_BATCHES];
         for(size_t i = 0; i < GPU_BATCHES; i++) {
             // Barely needs gpu_batches to be owned here.
             gpu_threads[i] = std::thread(run_gpu_thread,
                     i, og_config.verbose,
+                    std::ref(test_data),
                     std::ref(gpu_batches[i]),
                     std::ref(K)
             );
@@ -1084,24 +1084,24 @@ void run_testing_thread(const struct Config og_config) {
              * wait for result from the 1st batch sent
              */
 
-            const auto state = test_data->state.load();
+            const auto state = test_data.state.load();
 
             if (state == TestData::WAITING) {
                 sieve_mtx.lock();
-                test_data->lock();
+                test_data.lock();
 
                 uint8_t had_ready = sieve_data->sieves_ready;
-                bool set = sieve_data->try_set_testing_data(*test_data.get());
-                if (!set) test_data->gpu_stats.wait_not_active++;
+                bool set = sieve_data->try_set_testing_data(test_data);
+                if (!set) test_data.gpu_stats.wait_not_active++;
 
-                test_data->unlock();
+                test_data.unlock();
                 sieve_mtx.unlock();
 
                 if (set) {
                     assert( had_ready > 0 );
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
-                        test_data->active_batches += 1;
+                        test_data.active_batches += 1;
                         assert( batch.state == GPUBatch::WAITING );
                         batch.state = GPUBatch::EMPTY;
                         batch.state.notify_one();
@@ -1112,11 +1112,11 @@ void run_testing_thread(const struct Config og_config) {
                     sieve_data->sieves_ready.wait(0);
                     double wait = duration<double>(high_resolution_clock::now() - t0).count();
                     if (og_config.verbose >= 3) {
-                        printf("Wait for sieve: X=%u %.5f seconds\n", test_data->testing_x, wait);
+                        printf("Wait for sieve: X=%u %.5f seconds\n", test_data.testing_x, wait);
                     }
-                    test_data->lock();
-                    test_data->gpu_stats.d_wait_not_active += wait;
-                    test_data->unlock();
+                    test_data.lock();
+                    test_data.gpu_stats.d_wait_not_active += wait;
+                    test_data.unlock();
                 }
 
                 continue;
@@ -1124,7 +1124,7 @@ void run_testing_thread(const struct Config og_config) {
 
             assert( state == TestData::ACTIVE || state == TestData::DONE );
             if (state == TestData::ACTIVE ) {
-                test_data->wait_for_state_and_lock(TestData::DONE);
+                test_data.wait_for_state_and_lock(TestData::DONE);
             }
 
             if (!is_running) {
@@ -1132,49 +1132,49 @@ void run_testing_thread(const struct Config og_config) {
             }
 
             { // Done
-                assert( test_data->state == TestData::DONE );
-                assert( test_data->running_batches == 0 );
-                assert( test_data->test_i == test_data->unknown_m_i.size() );
+                assert( test_data.state == TestData::DONE );
+                assert( test_data.running_batches == 0 );
+                assert( test_data.test_i == test_data.unknown_m_i.size() );
 
                 // Merge all stats from gpu_stats
                 for (auto& batch : gpu_batches) {
                     assert( batch.state == GPUBatch::WAITING );
                     batch.lock();
-                    test_data->gpu_stats.merge(batch.stats);
+                    test_data.gpu_stats.merge(batch.stats);
                     batch.stats.reset();
                     batch.unlock();
                 }
 
                 sieve_mtx.lock();
 
-                remove_vector(sieve_data->active_m_i, test_data->found_prime_m_i);
+                remove_vector(sieve_data->active_m_i, test_data.found_prime_m_i);
                 if (sieve_data->active_m_i.size() < overflow_count) {
-                    test_data->stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
-                    test_data->stats.s_tests += sieve_data->num_valid;
+                    test_data.stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
+                    test_data.stats.s_tests += sieve_data->num_valid;
 
-                    push_to_overflow_and_increment_M_range();
+                    sieve_data->push_to_overflow_and_increment_M_range();
                     if (stop_queue)
                         stop_queue += 1;
 
-                    test_data->full_reset();
+                    test_data.full_reset();
 
                     // Mark m_inc tests as having been done, maybe print stats
-                    test_data->stats.s_gap_out_of_sieve_prev += og_config.m_inc;
+                    test_data.stats.s_gap_out_of_sieve_prev += og_config.m_inc;
                     if (og_config.verbose >= 1) {
                         // Occassionally print some stats
-                        test_data->maybe_print_stats();
+                        test_data.maybe_print_stats();
                     }
                 } else {
                     sieve_data->increment_X();
                 }
 
-                test_data->test_i = 0;
-                test_data->unknown_m_i.clear();
-                test_data->state = TestData::WAITING;
+                test_data.test_i = 0;
+                test_data.unknown_m_i.clear();
+                test_data.state = TestData::WAITING;
 
 
                 sieve_mtx.unlock();
-                test_data->unlock();
+                test_data.unlock();
             }
         }
 
@@ -1184,9 +1184,9 @@ void run_testing_thread(const struct Config og_config) {
         }
 
         if (og_config.verbose >= 1) {
-            test_data->lock();
-            test_data->print_stats();
-            test_data->unlock();
+            test_data.lock();
+            test_data.print_stats();
+            test_data.unlock();
         }
 
         if (og_config.verbose >= 3)
@@ -1254,7 +1254,6 @@ void prime_gap_test(struct Config config) {
     signal(SIGINT, signal_callback_handler);
 
     sieve_data = std::make_unique<SieveData>(config);
-    test_data = std::make_unique<TestData>(config);
 
     // This has output that's nicer close to the top.
     std::thread testing_thread(run_testing_thread, config);
@@ -1263,7 +1262,6 @@ void prime_gap_test(struct Config config) {
     // Setup
     {
         sieve_mtx.lock();
-        test_data->lock();
 
         auto s_start_t = high_resolution_clock::now();
         sieve_data->setup_sieve_data(false);
@@ -1275,7 +1273,6 @@ void prime_gap_test(struct Config config) {
         if (config.verbose >= 1)
             printf("\n");
 
-        test_data->unlock();
         sieve_mtx.unlock();
     }
     std::thread sieve_thread(run_sieve_thread);

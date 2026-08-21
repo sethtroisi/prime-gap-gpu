@@ -101,9 +101,9 @@ const int ROUNDS = 1;
 
 
 
-uint32_t process_finished_batch(GPUBatch& batch) {
-    test_data->lock();
-    assert(batch.x == test_data->testing_x);
+uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
+    test_data.lock();
+    assert(batch.x == test_data.testing_x);
 
     uint32_t found = 0;
     uint32_t m_i = 0;
@@ -118,23 +118,24 @@ uint32_t process_finished_batch(GPUBatch& batch) {
         if (batch.result[i]) {
             found++;
             m_i = batch.m_i[i];
-            test_data->add_found_prime_m_i(m_i);
+            test_data.add_found_prime_m_i(m_i);
         }
     }
 
     if (found > 0 && (rand() & 255) == 0) {
         // Spot check
         std::lock_guard lock(overflow_mtx);
-        spot_check.emplace_back(test_data->m_start + m_i, batch.x);
+        spot_check.emplace_back(test_data.m_start + m_i, batch.x);
     }
 
-    test_data->unlock();
+    test_data.unlock();
     return found;
 }
 
 /** test_data.lock should be held during call. */
 inline void fill_batch(
         uint32_t gpu_i,
+        TestData &test_data,
         GPUBatch& batch,
         const mpz_t &K,
         mpz_t &t,
@@ -150,21 +151,20 @@ inline void fill_batch(
     // Mark all results as invalid
     std::fill_n(batch.result.begin(), GPU_BATCH_SIZE, -1);
 
-    size_t j;
-    uint32_t first_test_i = test_data->test_i;
+    uint32_t first_test_i = test_data.test_i;
     {
-        assert( test_data->state == TestData::ACTIVE );
-        uint64_t m_start = test_data->m_start;
+        assert( test_data.state == TestData::ACTIVE );
+        uint64_t m_start = test_data.m_start;
         uint32_t gpu_i = batch.i;  // [GPU] batch index
-        j = test_data->test_i;
-        for (; j < test_data->unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++) {
+        size_t j = test_data.test_i;
+        for (; j < test_data.unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++) {
             // Skip any element where a previous prime was found.
             // Happens when primes from last X weren't removed from active_m before sieve started.
-            uint32_t m_i = test_data->unknown_m_i[j];
+            uint32_t m_i = test_data.unknown_m_i[j];
             uint32_t index = m_i >> 1;
 
             // Should happen only with a few primes found in last X.
-            if (test_data->found_prime_m_i[index >> 5] & (1 << (index & 31)))
+            if (test_data.found_prime_m_i[index >> 5] & (1 << (index & 31)))
                 continue;
 
             uint64_t m = m_start + m_i;
@@ -175,22 +175,22 @@ inline void fill_batch(
             gpu_i++;
         }
 
-        test_data->test_i = j;
+        test_data.test_i = j;
         batch.i = gpu_i;
     }
 
     assert( batch.i <= GPU_BATCH_SIZE);
 
-    if (test_data->verbose >= 4) {
+    if (test_data.verbose >= 4) {
         printf("\t\tFilled Batch(%u) | X=%u -> [%u, %lu) of %lu\n",
             gpu_i, x,
-            first_test_i, test_data->test_i, test_data->unknown_m_i.size());
+            first_test_i, test_data.test_i, test_data.unknown_m_i.size());
     }
 
     // Batches should be full unless lots of overflowed results.
-    if (test_data->verbose >= 4 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
+    if (test_data.verbose >= 4 && batch.i > 0 && batch.i < GPU_BATCH_SIZE) {
         printf("Partial load @ %u -> %lu this batch: %lu/%lu\n",
-            x, j, batch.i, GPU_BATCH_SIZE);
+            x, test_data.test_i, batch.i, GPU_BATCH_SIZE);
     }
 }
 
@@ -200,7 +200,9 @@ inline void fill_batch(
  * Multiple of these threads exist, one for each GPUBatch.
  * communicates with testing_thread via batch (GPUBatch)
  */
-void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K_in) {
+void run_gpu_thread(int runner_num, int verbose,
+                    TestData &test_data, GPUBatch& batch,
+                    const mpz_t &K_in) {
     try {
         {
             std::string name = "GPU(" + std::to_string(runner_num) + ")";
@@ -224,32 +226,32 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
             assert( batch.state == GPUBatch::EMPTY );
 
             { // Fill Batch logic
-                test_data->lock();
-                assert( !test_data->unknown_m_i.empty() );
+                test_data.lock();
+                assert( !test_data.unknown_m_i.empty() );
 
                 batch.fill_start = high_resolution_clock::now();
-                fill_batch(runner_num, batch, K, t, test_data->testing_x);
+                fill_batch(runner_num, test_data, batch, K, t, test_data.testing_x);
                 batch.fill_end = high_resolution_clock::now();
 
                 if (batch.i == 0) {
                     // Can happen if other batch took all remaining numbers or
                     // If last prime was just recently found prime
-                    assert( test_data->test_i == test_data->unknown_m_i.size() );
+                    assert( test_data.test_i == test_data.unknown_m_i.size() );
                     batch.state = GPUBatch::WAITING;
                     batch.unlock();
-                    test_data->active_batches -= 1;
-                    if (test_data->active_batches == 0) {
-                        assert( test_data->running_batches == 0 );
-                        test_data->state = TestData::DONE;
-                        test_data->state.notify_all();
+                    test_data.active_batches -= 1;
+                    if (test_data.active_batches == 0) {
+                        assert( test_data.running_batches == 0 );
+                        test_data.state = TestData::DONE;
+                        test_data.state.notify_all();
                     }
-                    test_data->unlock();
+                    test_data.unlock();
                     continue;
                 } else {
-                    test_data->running_batches += 1;
+                    test_data.running_batches += 1;
                     batch.state = GPUBatch::RUNNING;
                 }
-                test_data->unlock();
+                test_data.unlock();
             }
 
             // Verify all active items are all at the front of the batch.
@@ -287,7 +289,7 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
                 batch.results_start = high_resolution_clock::now();
 
                 // Process Batch (grabs test_data.lock internally)
-                batch.primes_in_batch = process_finished_batch(batch);
+                batch.primes_in_batch = process_finished_batch(test_data, batch);
                 batch.state = GPUBatch::DONE;
 
                 batch.results_end = high_resolution_clock::now();
@@ -309,22 +311,22 @@ void run_gpu_thread(int runner_num, int verbose, GPUBatch& batch, const mpz_t &K
                 batch.stats.d_results += ms_results;
 
                 if (verbose >= 4) {
-                    test_data->lock();
+                    test_data.lock();
                     printf("\tbatch(%u-%lu): %u primes | "
                             "batch timing fill: %.5f, gpu: %.5f, processing results: %.5f | "
                             "%u running %lu/%lu tested\n",
                             runner_num, batch.stats.batches_run,
                             batch.primes_in_batch,
                             ms_fill, ms_run, ms_results,
-                            test_data->running_batches.load() - 1, // -1 for us.
-                            test_data->test_i, test_data->unknown_m_i.size());
-                    test_data->unlock();
+                            test_data.running_batches.load() - 1, // -1 for us.
+                            test_data.test_i, test_data.unknown_m_i.size());
+                    test_data.unlock();
                 }
             }
 
             batch.state = GPUBatch::EMPTY;
             batch.unlock();
-            test_data->running_batches -= 1;
+            test_data.running_batches -= 1;
         }
 
         mpz_clear(K);

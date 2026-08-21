@@ -48,10 +48,6 @@ extern std::atomic<uint8_t> stop_queue;
          wait for overflow to finish
  */
 
-class TestData;
-// Don't read from test_data without holding locking it
-extern std::unique_ptr<TestData> test_data;
-
 extern std::mutex overflow_mtx;
 // deque (double ended queue) avoids a degenerate case of large gap getting stuck
 // if this can't keep up. Try to avoid falling behind, but this is an extra safety.
@@ -176,6 +172,7 @@ class SieveData {
         void setup_sieve_data(bool stop_after);
         void increment_X();
         bool try_set_testing_data(TestData &testing);
+        void push_to_overflow_and_increment_M_range();
 
     private:
         vector<bool> is_m_coprime; // Needed for is_coprime_and_valid_m cache.
