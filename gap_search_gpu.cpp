@@ -233,28 +233,8 @@ SieveData::SieveData(const struct Config config) {
     assert(K_primes.back() == config.p);
 
     // Has roughly p bits -> find out to 10 merit way more than needed.
-    {
-        uint32_t stop_x = config.p * 10;
-
-        // Center is odd, m is odd -> x must be even
-        assert(config.d % 2 == 0);
-
-        for (uint32_t x = 2; x < stop_x ; x += 2) {
-            uint64_t any_coprime;
-            any_coprime = false;
-
-            for (auto prime : K_primes) {
-                if (x % prime == 0) {
-                    any_coprime = true;
-                    break;
-                }
-            }
-
-            if (!any_coprime) {
-                this->coprime_X.push_back(x);
-            }
-        }
-    }
+    uint32_t stop_x = config.p * 10;
+    coprime_X = get_coprime_X(config, stop_x);
 }
 
 /**
@@ -472,9 +452,9 @@ void run_sieve_thread(void) {
         mpz_t K;
         struct Config config = sieve_data->config;
         init_K(config, K);
-        std::vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
-        std::vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
-        std::vector<uint32_t> d_primes;
+        vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
+        vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
+        vector<uint32_t> d_primes;
         uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
         {
             primesieve::iterator iter;
@@ -1112,6 +1092,7 @@ void prime_gap_test(struct Config config) {
     std::thread sieve_thread(run_sieve_thread);
 
     TestingStats test_stats;
+    setup_overflow(config);
     vector<std::thread> overflow_threads;
     for(size_t i = 0; i < (unsigned)config.cpu_threads; i++) {
         overflow_threads.emplace_back(

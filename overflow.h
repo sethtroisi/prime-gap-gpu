@@ -21,5 +21,8 @@
 #include "gap_common.h"
 #include "gap_stats.h"
 
+// Must be called before run_cpu_overflow_thread
+void setup_overflow(const struct Config config);
+
 void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats);

@@ -99,6 +99,9 @@ size_t count_num_m(long ms, long mi, uint64_t d);
 
 double prob_prime_and_stats(const struct Config& config, mpz_t &K);
 
-/* Prime Stuff */
+/** vector of X such that gcd(K, X[i]) == 1, 1 <= X[i] <= max_x */
+vector<uint32_t> get_coprime_X(const struct Config& config, uint32_t max_x);
 
+
+/* Prime Stuff */
 vector<uint32_t> get_sieve_primes(uint32_t n);

@@ -277,6 +277,40 @@ vector<uint32_t> get_sieve_primes(uint32_t n) {
     return primes;
 }
 
+vector<uint32_t> get_coprime_X(const struct Config& config, uint32_t max_x) {
+    vector<uint32_t> X;
+
+    vector<uint32_t> K_primes;
+    for (auto prime : get_sieve_primes(config.p)) {
+        if (config.d % prime != 0)
+            K_primes.push_back(prime);
+    }
+
+
+    for (uint32_t x = 1; x <= max_x ; x += 1) {
+        uint64_t any_coprime;
+        any_coprime = false;
+
+        for (auto prime : K_primes) {
+            if (x % prime == 0) {
+                any_coprime = true;
+                break;
+            }
+        }
+
+        if (!any_coprime) {
+            if (config.d % 2 == 0 && x % 2 == 1) {
+                // (m, d) = 1 -> m is odd
+                // K is odd because no 2
+                // m * K + X -> odd * odd + odd -> even
+                continue;
+            }
+            X.push_back(x);
+        }
+    }
+
+    return X;
+}
 
 void Args::show_usage(char* name, Pr program) {
     cout << "Usage: " << name << endl;
