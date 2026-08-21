@@ -58,6 +58,7 @@ extern std::mutex overflow_mtx;
 extern deque<std::pair<uint64_t, uint32_t>> overflowed;
 // M * K + X which was marked prime by GPU. should be prime 100% of time.
 extern deque<std::pair<uint64_t, uint32_t>> spot_check;
+extern std::condition_variable overflow_cv;
 
 
 class TestData {
