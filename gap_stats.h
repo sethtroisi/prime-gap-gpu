@@ -68,6 +68,9 @@ class TestingStats {
         std::atomic<uint64_t> mismatches = 0;
 
         std::atomic<uint64_t> spot_checked = 0;
+
+        std::atomic<double>   d_next_prime{0.0};
+        std::atomic<double>   d_spot_check{0.0};
 };
 
 

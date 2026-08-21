@@ -84,11 +84,18 @@ std::atomic<bool> is_running;
 std::atomic<uint8_t> stop_queue{0};
 
 // Don't read from sieve_data without holding sieve_mtx
-extern std::mutex sieve_mtx;
-extern std::unique_ptr<SieveData> sieve_data;
+std::mutex sieve_mtx;
+std::unique_ptr<SieveData> sieve_data;
 
+std::mutex overflow_mtx;
+std::condition_variable overflow_cv;
 
-extern std::condition_variable overflow_cv;
+// deque (double ended queue) avoids a degenerate case of large gap getting stuck
+// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
+deque<std::pair<uint64_t, uint32_t>> overflowed;
+// M * K + X which was marked prime by GPU. should be prime 100% of time.
+deque<std::pair<uint64_t, uint32_t>> spot_check;
+
 
 
 //*************************************************************************** //
@@ -168,18 +175,8 @@ void TestData::print_stats() {
 }
 
 void TestData::lock() {
-    while (1) {
-        // Should be 0 (unlocked) and we can lock
-        int expected = 0;
-        if (flag.compare_exchange_strong(expected, 1,
-                    std::memory_order_acquire, std::memory_order_acquire) ) {
-            assert( expected == 0 );
-            assert( flag == 1 );
-            return;
-        }
-
-        assert(expected == 1);
-        flag.wait(expected, std::memory_order_relaxed);
+    while (flag.exchange(1) == 1) {
+        flag.wait(1, std::memory_order_relaxed);
     }
 }
 
@@ -404,33 +401,9 @@ void SieveData::increment_X() {
     }
 }
 
-// GLOBALS PART 2
-
-// Don't read from sieve_data without holding sieve_mtx
-std::mutex sieve_mtx;
-std::unique_ptr<SieveData> sieve_data;
-
-std::mutex overflow_mtx;
-std::condition_variable overflow_cv;
-// deque (double ended queue) avoids a degenerate case of large gap getting stuck
-// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
-deque<std::pair<uint64_t, uint32_t>> overflowed;
-// M * K + X which was marked prime by GPU. should be prime 100% of time.
-deque<std::pair<uint64_t, uint32_t>> spot_check;
-
 void GPUBatch::lock() {
-    while (1) {
-        int expected = 0;
-        if (flag.compare_exchange_strong(expected, 1,
-                    std::memory_order_acquire, std::memory_order_acquire) ) {
-            assert( expected == 0 );
-            assert( flag == 1 );
-            return;
-        }
-
-        assert(expected == 1);
-        // Wait until not 1
-        flag.wait(expected, std::memory_order_relaxed);
+    while (flag.exchange(1) == 1) {
+        flag.wait(1, std::memory_order_relaxed);
     }
 }
 
@@ -834,7 +807,8 @@ bool overflow_should_run() {
 }
 
 
-void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats) {
+void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
+                             const mpz_t &K_in, TestingStats &stats) {
     try {
         {
             char name[16];
@@ -849,16 +823,17 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats)
         mpz_init(next_p);
         mpz_init(prev_p);
 
-        struct Config config = sieve_data->config;
+        double K_log = calc_log_K(og_config);
+        const float min_merit = og_config.min_merit;
+        const uint32_t P = og_config.p;
+        const uint32_t D = og_config.d;
 
-        double K_log = calc_log_K(config);
-        const float min_merit = config.min_merit;
         // See THEORY.md! Added const is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
-        const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(config.m_inc));
+        const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(og_config.m_inc));
 
         // 2-5x what comes in per batch
-        const uint64_t overflow_too_much = config.m_inc * config.cpu_fraction;
+        const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
         std::unique_lock<std::mutex> lock(overflow_mtx);
         while (is_running && (stop_queue < 2 || overflowed.size() > 0)) {
@@ -892,30 +867,35 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats)
                     auto m_and_x = spot_check.front(); spot_check.pop_front();
                     mpz_mul_ui(center, K, m_and_x.first);
                     mpz_add_ui(next_p, center, m_and_x.second);
+                    auto s_start_t = high_resolution_clock::now();
                     if (!mpz_probab_prime_p(next_p, 20)) {
                         printf("\n\n");
                         printf("%lu'th SPOT CHECK FAILED!\n", stats.spot_checked.load());
                         printf("%lu * %u# / %u + %u is not prime!\n",
-                                m_and_x.first, config.p, config.d, m_and_x.second);
+                                m_and_x.first, P, D, m_and_x.second);
                         printf("\n\n");
                         exit(1);
                     }
+                    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                    stats.d_spot_check += total_s;
                     continue;
                 }
 
                 auto m_and_x = overflowed.front(); overflowed.pop_front();
                 lock.unlock();
 
-                stats.tested++;
-
                 auto m = m_and_x.first;
                 auto min_x = m_and_x.second;
 
+                auto s_start_t = high_resolution_clock::now();
                 mpz_mul_ui(center, K, m);
                 mpz_add_ui(next_p, center, min_x);
                 mpz_nextprime(next_p, next_p);
                 mpz_sub(next_p, next_p, center);
                 uint64_t next_gap = mpz_get_ui(next_p);
+                double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                stats.d_next_prime += total_s;
+                stats.tested++;
 
                 if (next_gap < MIN_GAP_TO_CONTINUE) {
                     stats.skipped_prev++;
@@ -938,13 +918,13 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats)
                             stats.mismatches++;
                             printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u - %lu "
                                     "(probably because only 1 miller-rabin test)\n",
-                                    test_gap, gap, m, config.p, config.d, prev_gap);
+                                    test_gap, gap, m, P, D, prev_gap);
                             merit = test_gap / (K_log + log(m));
                         }
 
                         if (merit > min_merit) {
                             printf("%lu %.3f %lu * %u# / %u - %lu\n",
-                                    gap, merit, m, config.p, config.d, prev_gap);
+                                    gap, merit, m, P, D, prev_gap);
                         }
                     }
                 }
@@ -953,22 +933,24 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in, TestingStats &stats)
             }
         }
 
-        if (i == 0 && config.verbose >= 1) {
+        if (i == 0 && og_config.verbose >= 1) {
             printf("\nCPU OVERFLOW Timing:\n");
-            printf("\ttotal tested: %lu\n", stats.tested.load());
-            printf("\tspot checked: %lu\n", stats.spot_checked.load());
+            printf("\ttotal tested   : %lu (%.4f/next_prime)\n",
+                    stats.tested.load(), stats.d_next_prime / (0.01 + stats.tested));
+            printf("\tspot checked   : %lu (%.5f/prob_prime)\n",
+                    stats.spot_checked.load(), stats.d_spot_check / (0.01 + stats.spot_checked));
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
             uint32_t large = stats.greater_than_min_merit;
             if (large) {
                 printf("\t> %.1f merit: %u (%lu = %.1f%% bad next_prime)\n",
-                        config.min_merit, large, stats.mismatches.load(),
+                        min_merit, large, stats.mismatches.load(),
                         100.0 * stats.mismatches.load() / large);
             }
             printf("\n");
         }
 
-        if (config.verbose >= 3) {
+        if (og_config.verbose >= 3) {
             usleep(i * 10'000); // i * 10ms
             printf("\tCPU overflow(%u) done\n", i);
         }
@@ -1035,7 +1017,7 @@ void run_testing_thread(const struct Config og_config) {
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
 
         const uint64_t count_valid_m = count_num_m(og_config.m_start, og_config.m_inc, D);
-        const uint64_t overflow_count = count_valid_m * sieve_data->config.cpu_fraction;
+        const uint64_t overflow_count = count_valid_m * og_config.cpu_fraction;
 
         // Print Header info
         if (og_config.verbose >= 1) {
@@ -1280,7 +1262,9 @@ void prime_gap_test(struct Config config) {
     TestingStats test_stats;
     vector<std::thread> overflow_threads;
     for(size_t i = 0; i < (unsigned)config.cpu_threads; i++) {
-        overflow_threads.emplace_back(run_cpu_overflow_thread, i, std::ref(K), std::ref(test_stats));
+        overflow_threads.emplace_back(
+                run_cpu_overflow_thread,
+                i, std::ref(config), std::ref(K), std::ref(test_stats));
     }
 
     while (is_running && stop_queue == 0) {
