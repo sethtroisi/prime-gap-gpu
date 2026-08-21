@@ -1135,7 +1135,6 @@ void run_cpu_overflow_thread(uint32_t i, const mpz_t &K_in) {
             while (is_running && (overflowed.size() || spot_check.size())) {
                 assert(lock.owns_lock());
 
-                // process_results does most printing. This is to gauge overflow size.
                 if (stats.tested % 10'000 == 0 && overflowed.size() > overflow_too_much) {
                     printf("\tCPU Sieve Queue: %lu open, %lu processed\n",
                             overflowed.size(), stats.tested.load());

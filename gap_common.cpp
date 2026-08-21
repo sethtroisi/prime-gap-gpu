@@ -39,39 +39,6 @@ using namespace std::chrono;
 
 
 
-static const std::map<uint64_t,uint64_t> common_primepi = {
-    {       10'000'000,        664'579},
-    {      100'000'000,      5'761'455},
-    {      200'000'000,     11'078'937},
-    {      400'000'000,     21'336'326},
-    {      800'000'000,     41'146'179},
-    {    1'000'000'000,     50'847'534},
-    {    2'000'000'000,     98'222'287},
-    {    3'000'000'000,    144'449'537},
-    {    4'000'000'000,    189'961'812},
-    {    5'000'000'000,    234'954'223},
-    {    6'000'000'000,    279'545'368},
-    {   10'000'000'000,    455'052'511},
-    {   15'000'000'000,    670'180'516},
-    {   20'000'000'000,    882'206'716},
-    {   25'000'000'000,  1'091'987'405},
-    {   30'000'000'000,  1'300'005'926},
-    {   40'000'000'000,  1'711'955'433},
-    {   50'000'000'000,  2'119'654'578},
-    {   60'000'000'000,  2'524'038'155},
-    {  100'000'000'000,  4'118'054'813},
-    {  200'000'000'000,  8'007'105'059},
-    {  300'000'000'000,  11'818'439'135},
-    {  400'000'000'000,  15'581'005'657},
-    {  500'000'000'000,  19'308'136'142},
-    {1'000'000'000'000,  37'607'912'018},
-    {2'000'000'000'000,  73'301'896'139},
-    {3'000'000'000'000, 108'340'298'703},
-    {4'000'000'000'000, 142'966'208'126},
-    {5'000'000'000'000, 177'291'661'649}
-};
-
-
 uint64_t gcd(uint64_t a, uint64_t b) {
     if (b == 0) return a;
     return gcd(b, a % b);
@@ -315,27 +282,6 @@ vector<uint32_t> get_sieve_primes(uint32_t n) {
 }
 
 
-bool is_prime_brute(uint32_t n) {
-    if ((n & 1) == 0)
-        return false;
-    for (uint32_t p = 3; p * p <= n; p += 2)
-        if (n % p == 0)
-            return false;
-    return true;
-}
-
-
-size_t primepi_estimate(uint64_t max_prime) {
-    // Lookup primepi for common max_prime values.
-    if (common_primepi.count(max_prime)) {
-        return common_primepi.at(max_prime);
-    }
-    return 1.04 * max_prime / log(max_prime);
-
-}
-
-
-
 void Args::show_usage(char* name, Pr program) {
     Config defaults;
 
@@ -550,16 +496,3 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
     return config;
 }
-
-
-BitArrayHelper::BitArrayHelper(const struct Config& config, const mpz_t &K) {
-    const unsigned int D = config.d;
-
-    neg_K_mod_d = mpz_cdiv_ui(K, D);
-    if (D > 1) {
-        assert(neg_K_mod_d != 0);
-    }
-
-    assert(D_primes.size() <= 9);  // 23# > 2^32
-    assert( (config.d == 1) || (!D_primes.empty() && D_primes.front() >= 2) );
-};

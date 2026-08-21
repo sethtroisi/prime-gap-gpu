@@ -22,6 +22,7 @@ done/
 temp_tests.log
 perf.data
 perf.data.old
+records_*.txt
 
 # PrimeForms
 pfgw

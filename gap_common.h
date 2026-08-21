@@ -74,44 +74,12 @@ class Args
 
         static void show_usage(char* name, Pr program);
         static Config argparse(int argc, char* argv[], Pr program);
-        static std::string gen_unknown_fn(const struct Config& config, std::string suffix);
-        static int guess_compression(
-            const struct Config& config,
-            std::ifstream& unknown_file);
 
     private:
         // Disallow creating instance
         Args() = default;
 };
 
-
-class BitArrayHelper {
-    public:
-        BitArrayHelper(const struct Config& config, const mpz_t &K);
-
-        /** Helper method for handling config.compression == 2 */
-        vector<uint32_t> P_primes;
-        vector<uint32_t> D_primes;
-
-        /**
-         * vector of x (in interval [-SL, SL]) with (K, x) == 1
-         * values are storted [0, 2*SL] by adding +SL
-         */
-        vector<int32_t> coprime_X;
-
-        /** is_offset_coprime[x] = ((K, x) == 1) */
-        vector<char> is_offset_coprime;
-
-        // When D % 2 == 0 =>  m % 2 == 1 => X % 2 == 0
-        vector<int32_t> coprime_X_even;
-        vector<char> is_offset_coprime_even;
-
-        /**
-         * (-K) % d, used to find first multiple of prime in: m * K + [-SL, SL]
-         */
-        uint32_t neg_K_mod_d;
-        uint32_t SL_mod_d;
-};
 
 /* Random Utils */
 
@@ -136,7 +104,4 @@ double prob_prime_and_stats(const struct Config& config, mpz_t &K);
 
 /* Prime Stuff */
 
-bool is_prime_brute(uint32_t n);
 vector<uint32_t> get_sieve_primes(uint32_t n);
-
-size_t primepi_estimate(uint64_t max_prime);

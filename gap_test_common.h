@@ -1,4 +1,4 @@
-// Copyright 2021 Seth Troisi
+// Copyright 2026 Seth Troisi
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,20 +54,6 @@ class StatsCounters {
         float     s_total_merit = 0.0;
         uint64_t    s_total_prev_p = 0;
         uint64_t    s_total_next_p = 0;
-
-        // This can change in const possibly_print_stats
-        mutable float     s_tests_per_second = 0;
-
-        /** Return if stats were printed */
-        void process_results(
-            const Config &config,
-            long m,
-            int prev_p, int next_p,
-            int p_tests, int n_tests,
-            float merit);
-
-        bool possibly_print_stats(
-            const std::string name, const Config &config) const;
 };
 
 

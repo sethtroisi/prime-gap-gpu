@@ -13,7 +13,7 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o gap_test_common.o
+OBJS	= gap_common.o
 OUT	= gap_search_gpu
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native
@@ -38,7 +38,7 @@ sieve_small.o: sieve_small.cu
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
-gap_search_gpu: gap_search_gpu.cu gap_common.o gap_test_common.o #sieve_small.o
+gap_search_gpu: gap_search_gpu.cu $(OBJS) #sieve_small.o
 	nvcc -o $@ -DGPU_BITS=$(BITS) $^ \
 		$(CUDA_FLAGS) \
 		-I../CGBN/include \
