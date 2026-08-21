@@ -15,25 +15,21 @@
 #include "gap_common.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <cstring>
+#include <cstdlib>
 #include <getopt.h>
 #include <iostream>
 #include <limits>
 
-/* for dirname(3) */
-#include <libgen.h>
-
-/* for primesieve::iterator */
-#include <primesieve.hpp>
-
+#include <gmp.h>
 
 using std::cout;
 using std::endl;
 using std::pair;
-using std::string;
 using std::vector;
 using namespace std::chrono;
 
@@ -283,8 +279,6 @@ vector<uint32_t> get_sieve_primes(uint32_t n) {
 
 
 void Args::show_usage(char* name, Pr program) {
-    Config defaults;
-
     cout << "Usage: " << name << endl;
     cout << "[REQUIRED]" << endl;
     cout << "  -p <p>" << endl;

@@ -18,12 +18,16 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <queue>
 #include <tuple>
 #include <unistd.h>
+#include <utility>
 #include <vector>
+
+#include <gmp.h>
 
 #include "gap_common.h"
 #include "gap_stats.h"

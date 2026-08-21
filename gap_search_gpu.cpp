@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
 void TestData::print_stats() {
     double total_t = duration<double>(high_resolution_clock::now() - stats.s_start_t).count();
     setlocale(LC_NUMERIC, "");
-    printf("\nGPU Timings:\n");
+    printf("\nGPU Timings (%.0f seconds):\n", total_t);
     printf("\tm               : %'lu (%'u/sec)\n",
             stats.s_gap_out_of_sieve_prev, (uint32_t) (stats.s_gap_out_of_sieve_prev / total_t));
     printf("\tm processed     : %'lu (%'u/sec)\n",
@@ -884,6 +884,8 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                 auto m_and_x = overflowed.front(); overflowed.pop_front();
                 lock.unlock();
 
+                // Do this before testing to prevent multiple CPU Sieve Queue prints on same tested value.
+                stats.tested++;
                 auto m = m_and_x.first;
                 auto min_x = m_and_x.second;
 
@@ -895,7 +897,6 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                 uint64_t next_gap = mpz_get_ui(next_p);
                 double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
                 stats.d_next_prime += total_s;
-                stats.tested++;
 
                 if (next_gap < MIN_GAP_TO_CONTINUE) {
                     stats.skipped_prev++;

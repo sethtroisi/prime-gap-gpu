@@ -15,13 +15,10 @@
 #pragma once
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
-#include <fstream>
-#include <functional>
 #include <map>
 #include <string>
-#include <tuple>
-#include <utility>
 #include <vector>
 
 #include <gmp.h>

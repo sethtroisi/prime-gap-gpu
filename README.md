@@ -31,6 +31,18 @@ $ git clone https://github.com/sethtroisi/prime-gap-gpu.git
 $ cd prime-gap-gpu
 ```
 
+```
+make
+
+or
+
+(Not reccomeneded but here for clang-tidy maybe)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBITS=512
+cd build
+make
+```
+
+
 ## Misc
 
 ```
@@ -52,7 +64,6 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
       * Converts a lot of L3 access to L1/L2 access.
 
   * [ ] Why does X=12 have twice as many unknowns at X=482?
-  * [ ] Log time in GPU Timings
 
 
 ## TODONE
