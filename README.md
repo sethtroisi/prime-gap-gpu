@@ -63,6 +63,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
     * Instead of sieving 500 m for 1 active m, sieve 5x more numbers than needed
       * Converts a lot of L3 access to L1/L2 access.
 
+  * [ ] Investigate GAP MISMATCH reporting, I think some of the variables are being reused
   * [ ] Why does X=12 have twice as many unknowns at X=482?
 
 

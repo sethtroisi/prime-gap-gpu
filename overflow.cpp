@@ -51,9 +51,9 @@ bool overflow_should_run() {
 
 /**
  * [X] do sieve here. (+15-20%)
- * Move that to some struct
- * Create OverflowBatch
- * Push OverflowBatch occasionally to a GPUBatch
+ * Store test_x_i, composite in struct
+ * Create OverflowBatch with 4096 structs
+ * New FillBatch -> GPUBatch
  * Access to runner.run_test in gpu_testing
  * Handle prev prime the same way or ???
  */
@@ -66,8 +66,8 @@ vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
 
 void setup_overflow(const struct Config config) {
-    // Set to large enough that we don't have to deal with edge-case where it isn't enough
-    uint32_t stop_x = 42 * config.p;
+    // Overflows less than .1% of the time, probably should tune higher
+    uint32_t stop_x = 15 * config.p;
     {
         auto X = get_coprime_X(config, stop_x);
         coprime_X.reserve(X.size());
@@ -76,13 +76,15 @@ void setup_overflow(const struct Config config) {
         }
     }
 
+    // TODO d wheel to speed this up a fraction.
+
     mpz_t K;
     init_K(config, K);
     {
         primesieve::iterator iter;
         uint64_t prime = iter.next_prime();
         assert (prime == 2);  // we skip 2 which is the oddest prime.
-        for (prime = iter.next_prime(); prime < 5'000'000; prime = iter.next_prime()) {
+        for (prime = iter.next_prime(); prime < 200'000; prime = iter.next_prime()) {
             if (prime <= config.p && (config.d % prime != 0))
                 continue;
 
@@ -96,8 +98,6 @@ void setup_overflow(const struct Config config) {
             }
         }
     }
-
-
 }
 
 
@@ -105,47 +105,34 @@ void setup_overflow(const struct Config config) {
  * [sieve_start, sieve_start + sieve_length)
  */
 void sieve_interval_cpu(const uint64_t m,
-        const int32_t sieve_start,
-        const int32_t sieve_length,
-        vector<uint8_t> &composite,
-        const uint32_t start_coprime_x_i,
-        vector<uint16_t> &out_X) {
+        const uint32_t sieve_start,
+        const uint32_t sieve_length,
+        vector<uint8_t> &composite) {
 
     uint16_t bytes = (sieve_length + 7) / 8 + 1;
-    // Includes evens for now
-    // TODO: test as just index 6KB vs <1KB
     composite.resize(bytes, 0);
     std::fill(composite.begin(), composite.end(), 0);
 
-    const uint8_t SENTINAL_I = sieve_length;
+    // only interested in even i
+    assert(sieve_start % 2 == 0);
+    assert(m > p_and_neg_r.back().first);
 
     for (const auto& [p, neg_r] : p_and_neg_r_small) {
         // -(m * K + sieve_start) % r
-        int64_t center_mod = ((int64_t) m * neg_r - sieve_start) % p;
-        center_mod += (center_mod < 0) ? 0 : p;
+        uint64_t center_mod = ((uint64_t) m * neg_r - sieve_start) % p;
+        center_mod += (center_mod & 1) ? p : 0;
 
-        // Could do by 2*p but not worth the extra code IMO
-        for (int32_t i = center_mod; i < sieve_length; i += p) {
+        uint32_t two_p = p << 1;
+        for (uint32_t i = center_mod; i < sieve_length; i += two_p) {
             composite[i >> 3] |= 1 << (i & 7);
         }
     }
 
     for (const auto& [p, neg_r] : p_and_neg_r) {
         // -(m * K + sieve_start) % r
-        int64_t center_mod = ((int64_t) m * neg_r - sieve_start) % p;
-        center_mod += (center_mod < 0) ? p : 0;
-
-        uint32_t i = center_mod < sieve_length ? center_mod : SENTINAL_I;
-        composite[i >> 3] |= 1 << (i & 7);
-    }
-
-    out_X.clear();
-    uint32_t N = coprime_X.size();
-    for (uint32_t x_i = start_coprime_x_i; x_i < N; x_i++) {
-        uint16_t x = coprime_X[x_i];
-        uint16_t j = x - sieve_start;
-        if ((composite[j >> 3] & (1 << (j & 7))) == 0) {
-            out_X.push_back(x);
+        uint64_t center_mod = ((uint64_t) m * neg_r - sieve_start) % p;
+        if (center_mod < sieve_length && (center_mod & 1) == 0) {
+            composite[center_mod >> 3] |= 1 << (center_mod & 7);
         }
     }
 }
@@ -153,9 +140,7 @@ void sieve_interval_cpu(const uint64_t m,
 uint32_t next_prime_distance(
         const uint64_t m, const uint64_t min_x,
         const mpz_t &K, mpz_t &center, mpz_t &tmp,
-        vector<uint8_t> &composite_tmp,
-        vector<uint16_t> &out_X,
-        uint32_t expect) {
+        vector<uint8_t> &composite_tmp) {
 
     // TODO something better than this
     uint32_t min_x_i = std::distance(
@@ -170,26 +155,26 @@ uint32_t next_prime_distance(
 
     sieve_interval_cpu(
         m, next_possible_x, coprime_X.back() - next_possible_x + 1,
-        composite_tmp, min_x_i, out_X);
-
-    assert( out_X.size() > 0 );
-    assert( out_X.front() >= next_possible_x );
+        composite_tmp);
 
     mpz_mul_ui(center, K, m);
-    for (auto x : out_X) {
-        mpz_add_ui(tmp, center, x);
-        if (mpz_probab_prime_p(tmp, 20)) {
-            assert(x == expect);
-            return x;
+
+    const uint32_t N = coprime_X.size();
+    for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
+        uint16_t x = coprime_X[x_i];
+        uint16_t j = x - next_possible_x;
+        if ((composite_tmp[j >> 3] & (1 << (j & 7))) == 0) {
+            mpz_add_ui(tmp, center, x);
+            if (mpz_probab_prime_p(tmp, 20)) {
+                return x;
+            }
         }
     }
 
-    printf("\n\nERROR: Didn't find next prime for %lu * K, after %lu tests\n",
-            m, out_X.size());
-
-
-    // Guarentees a mismatch statement after.
-    return 100000;
+    // Fallback to mpz_nextprime if very large
+    mpz_nextprime(tmp, tmp);
+    mpz_sub(tmp, tmp, center);
+    return mpz_get_ui(tmp);
 }
 
 
@@ -210,7 +195,6 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
         mpz_init(next_p);
         mpz_init(prev_p);
         vector<uint8_t> composite_tmp;
-        vector<uint16_t> unknown_X;
 
 
         double K_log = calc_log_K(og_config);
@@ -284,7 +268,7 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
 
                 auto s_start_t = high_resolution_clock::now();
                 uint64_t next_gap = 0;
-                if (1) {
+                if (0) {
                     mpz_mul_ui(center, K, m);
                     mpz_add_ui(next_p, center, min_x);
                     mpz_nextprime(next_p, next_p);
@@ -294,7 +278,7 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                     next_gap = next_prime_distance(
                             m, min_x,
                             K, center, next_p,
-                            composite_tmp, unknown_X, next_gap);
+                            composite_tmp);
                 }
                 double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
                 stats.d_next_prime += total_s;
@@ -322,6 +306,7 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                                     "(probably because only 1 miller-rabin test)\n",
                                     test_gap, gap, m, P, D, prev_gap);
                             merit = test_gap / (K_log + log(m));
+                            // TODO verify that powm(2, N-1, N) = 1 and record differently
                         }
 
                         if (merit > min_merit) {
