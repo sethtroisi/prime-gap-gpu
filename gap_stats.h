@@ -79,6 +79,8 @@ class TestingStats {
         std::atomic<double>   d_next_prime_sieve{0.0};
         std::atomic<double>   d_next_prime_cpu{0.0};
         std::atomic<double>   d_next_prime_gpu{0.0};
+        std::atomic<double>   d_next_prime_gpu_misc{0.0};
+        std::atomic<double>   d_prev_prime_cpu{0.0};
         std::atomic<double>   d_spot_check{0.0};
 };
 

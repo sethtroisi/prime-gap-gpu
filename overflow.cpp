@@ -44,11 +44,6 @@ using std::cerr;
 using std::endl;
 using namespace std::chrono;
 
-
-bool overflow_should_run() {
-    return !is_running || stop_queue >= 2 || overflowed.size();
-}
-
 /**
  * [X] do sieve here. (+15-20%)
  * Store test_x_i, composite in struct
@@ -59,6 +54,7 @@ bool overflow_should_run() {
  * Handle prev prime the same way or ???
  */
 
+
 /** Globals for this class */
 
 vector<uint16_t> coprime_X;
@@ -67,8 +63,24 @@ vector<uint16_t> next_coprime_index;
 vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
 vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
+std::mutex file_mutex;
+std::mutex batch_mutex; // TODO better name
 OverflowBatch overflow_batch;
 
+std::atomic<uint32_t> prev_queue_size{0};
+/** 2nd Queue of overflows with next_p done. */
+std::mutex prev_queue_mutex;
+deque<std::pair<uint64_t, uint32_t>> prev_queue;
+
+const uint32_t OVERFLOW_SIEVE_LIMIT = 200'000;
+
+
+
+
+
+bool overflow_should_run() {
+    return !is_running || stop_queue >= 2 || overflowed.size() || prev_queue_size > 0;
+}
 
 void setup_overflow(const struct Config config) {
     // TODO TUNE THIS
@@ -102,7 +114,7 @@ void setup_overflow(const struct Config config) {
         primesieve::iterator iter;
         uint64_t prime = iter.next_prime();
         assert (prime == 2);  // we skip 2 which is the oddest prime.
-        for (prime = iter.next_prime(); prime < 200'000; prime = iter.next_prime()) {
+        for (prime = iter.next_prime(); prime < OVERFLOW_SIEVE_LIMIT; prime = iter.next_prime()) {
             if (prime <= config.p && (config.d % prime != 0))
                 continue;
 
@@ -117,8 +129,6 @@ void setup_overflow(const struct Config config) {
         }
     }
 }
-
-std::mutex file_mutex;
 
 static
 void process_result(
@@ -167,11 +177,11 @@ void process_result(
 
             file_mutex.lock();
             record_stream << record << endl;
+            record_stream.flush();
             file_mutex.unlock();
         }
     }
 }
-
 
 /** Expects center to be correctly set */
 static
@@ -192,12 +202,14 @@ void handle_next_prime_result(
         return;
     }
 
+    auto s_start_t = high_resolution_clock::now();
     stats.tested_prev++;
     mpz_prevprime(prev_p, center);
     mpz_sub(prev_p, center, prev_p);
     uint64_t prev_gap = mpz_get_ui(prev_p);
     uint64_t gap = prev_gap + next_gap;
     double merit = gap / (K_log + log(m));
+    stats.d_prev_prime_cpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
     process_result(
         min_merit, K_log, P, D, K, center,
@@ -267,6 +279,7 @@ uint32_t next_prime_distance(
 
     mpz_mul_ui(center, K, m);
 
+    s_start_t = high_resolution_clock::now();
     const uint32_t N = coprime_X.size();
     for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
         uint16_t x = coprime_X[x_i];
@@ -328,14 +341,9 @@ void push_to_overflow_batch(
 static
 uint32_t run_overflow_batch(
         const float MIN_GAP_TO_CONTINUE,
-        const float min_merit,
-        const double K_log, const uint32_t P, const uint32_t D,
         const mpz_t &K, mpz_t &center,
-
-        mpz_t &next_p, mpz_t &prev_p,
-        mpz_t &tmp, mpz_t &tmp2,
-        TestingStats &stats,
-        std::ofstream &record_stream) {
+        mpz_t &tmp,
+        TestingStats &stats) {
 
     GPUBatch &gpu_batch = overflow_batch.gpu_batch;
     for (uint32_t i = 0; i < overflow_batch.N; i++) {
@@ -378,10 +386,13 @@ uint32_t run_overflow_batch(
                 }
             }
 
-            handle_next_prime_result(
-                MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D, K, center,
-                m, next_gap,
-                next_p, prev_p, tmp, tmp2, stats, record_stream);
+            // TODO Push to some temp queue then unlock only once.
+            if (next_gap > MIN_GAP_TO_CONTINUE) {
+                prev_queue_mutex.lock();
+                prev_queue.emplace_back(m, next_gap);
+                prev_queue_size++;
+                prev_queue_mutex.unlock();
+            }
 
         } else {
             // Advance to next test see `next_prime_distance`
@@ -410,10 +421,13 @@ uint32_t run_overflow_batch(
                 stats.d_next_prime_cpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
                 stats.tested_cpu++;
 
-                handle_next_prime_result(
-                    MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D, K, center,
-                    m, next_gap,
-                    next_p, prev_p, tmp, tmp2, stats, record_stream);
+                // TODO Push to some temp queue then unlock only once.
+                if (next_gap > MIN_GAP_TO_CONTINUE) {
+                    prev_queue_mutex.lock();
+                    prev_queue.emplace_back(m, next_gap);
+                    prev_queue_size++;
+                    prev_queue_mutex.unlock();
+                }
             }
         }
     }
@@ -462,6 +476,8 @@ void run_tests_on_cpu(
 }
 
 
+uint32_t USE_GPU_FOR_OVERFLOW = true;
+
 void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
     try {
@@ -471,8 +487,6 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
             pthread_setname_np(pthread_self(), name);
             std::ignore = nice(+10); // Lower priority a bit
         }
-
-        //assert(i == 0); // With current GPU setup.
 
         // Pre-allocated
         mpz_t K, center, next_p, prev_p, tmp, tmp2;
@@ -521,6 +535,25 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                     }
                 }
 
+                while (prev_queue_size) {
+                    prev_queue_mutex.lock();
+                    if (!prev_queue.size()) {
+                        break;
+                        prev_queue_mutex.unlock();
+                    }
+                    prev_queue_size--;
+                    auto [m, next_gap] = prev_queue.front(); prev_queue.pop_front();
+                    prev_queue_mutex.unlock();
+
+                    mpz_mul_ui(center, K, m);
+                    handle_next_prime_result(
+                        MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
+                        K, center,
+                        m, next_gap,
+                        next_p, prev_p, tmp, tmp2, stats, record_stream);
+                }
+
+                // TODO better check here.
                 if (!overflowed.size()) {
                     stats.spot_checked++;
                     assert(spot_check.size());
@@ -549,14 +582,9 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                 auto m = m_and_x.first;
                 auto min_x = m_and_x.second;
 
-                if (1) {
-                    run_tests_on_cpu(
-                            MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
-                            m, min_x, K,
-                            center, next_p, prev_p,
-                            tmp, tmp2, composite_tmp, stats, record_stream);
-                } else {
-                    lock.lock();
+                if (USE_GPU_FOR_OVERFLOW) {
+                    auto s_start_t = high_resolution_clock::now();
+                    batch_mutex.lock();
                     push_to_overflow_batch(
                         m, min_x,
                         K, center, tmp,
@@ -566,24 +594,34 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                         for (size_t i = 0; i < 10; i++) {
                             auto found = run_overflow_batch(
                                     MIN_GAP_TO_CONTINUE,
-                                    min_merit, K_log, P, D, K, center,
-                                    next_p, prev_p, tmp, tmp2, stats,
-                                    record_stream);
+                                    K, center, tmp, stats);
                             if (found) break;
                             printf("GPUBatch didn't find any primes?\n");
                         }
                     }
-
-                    lock.unlock();
+                    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                    stats.d_next_prime_gpu_misc += total_s;
+                    batch_mutex.unlock();
+                    overflow_cv.notify_all(); // Wake up other threads to deal with prev_prime queue
+                } else {
+                    run_tests_on_cpu(
+                            MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
+                            m, min_x, K,
+                            center, next_p, prev_p,
+                            tmp, tmp2, composite_tmp, stats, record_stream);
                 }
 
                 lock.lock();
             }
         }
 
+        if (lock.owns_lock()) {
+            lock.unlock();
+        }
 
-        if (is_running && overflow_batch.added) { // Clear out any remaining items queued in GPUBatch
-            assert(lock.owns_lock());
+        if (i == 0 && is_running && overflow_batch.added) {
+            // Clear out any remaining items queued in GPUBatch
+            lock.lock();
             if (og_config.verbose >= 1) {
                 printf("\tCPU OVERFLOW Finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
             }
@@ -626,8 +664,14 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                     stats.spot_checked.load(), stats.d_spot_check / (EPS + stats.spot_checked));
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
-            printf("\ttotal time     : cpu: %.1f, gpu %.1f\n",
-                    stats.d_next_prime_cpu.load(), stats.d_next_prime_gpu.load());
+            printf("\ttotal time     : sieve: %.1f, cpu: %.1f, gpu %.1f\n",
+                    stats.d_next_prime_sieve.load(),
+                    stats.d_next_prime_cpu.load(),
+                    stats.d_next_prime_gpu.load());
+            printf("\t               : prev_prime (cpu): %.1f, gpu misc: %.1f\n",
+                    stats.d_prev_prime_cpu.load(),
+                    stats.d_next_prime_gpu_misc.load());
+
             printf("\tnext prime test/sec sieve: %0.f, cpu: %.0f, gpu: %.0f\n",
                     stats.tested / stats.d_next_prime_sieve,
                     stats.tested_cpu / stats.d_next_prime_cpu,

@@ -851,7 +851,7 @@ void run_testing_thread(const struct Config og_config) {
             float m_log = log(og_config.m_inc);
                 printf("Min Gap ~= %'d (for merit > %.1f)\n",
                     (int) (min_merit * (K_log + m_log)), min_merit);
-                printf("Min Gap to continue ~= %'d (for merit = %.1f)\n",
+                printf("Min Gap to continue ~= %'d (merit = %.1f)\n",
                     (int) (MIN_MERIT_TO_CONTINUE * (K_log + m_log)),
                     MIN_MERIT_TO_CONTINUE);
 

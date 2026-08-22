@@ -49,6 +49,21 @@ make
 valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
 ```
 
+## TUNING
+
+  * `--cpu-fraction`
+    * Increasing leads to less sparse sieves across X, trades of for more overflow work
+  * `OVERFLOW_SIEVE_LIMIT`: TODO
+    * Trades CPU sieving for GPU time, look at `total time     : sieve` from `CPU OVERFLOW Timing`
+  * `max-prime` better to increase at some point top primes never run
+  * `minc`: TODO add some metric to tune on.
+
+These likely are set good enough
+
+   * `OPEN_SIEVES` 3-6 is probably great balance of enough unknown count smoothing while minimizing memory usage.
+   * `GPU_BATCHES` 2-3, 3 is probably better.
+
+
 ## TODO
 
   * [ ] Faster sieving

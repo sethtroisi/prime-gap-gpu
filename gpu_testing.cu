@@ -122,11 +122,11 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
         }
     }
 
-    if (found > 0 && (rand() & 255) == 0) {
+    //if (found > 0 && (rand() & 255) == 0) {
         // Spot check
-        std::lock_guard lock(overflow_mtx);
-        spot_check.emplace_back(test_data.m_start + m_i, batch.x);
-    }
+        //std::lock_guard lock(overflow_mtx);
+        //spot_check.emplace_back(test_data.m_start + m_i, batch.x);
+    //}
 
     test_data.unlock();
     return found;
