@@ -23,6 +23,9 @@
 extern const size_t GPU_BATCHES;
 extern const size_t GPU_BATCH_SIZE;
 
+// TODO experimental
+void one_shot_batch(GPUBatch& batch);
+
 void run_gpu_thread(int runner_num, int verbose,
                     TestData &test_data, GPUBatch& batch,
                     const mpz_t &K_in);

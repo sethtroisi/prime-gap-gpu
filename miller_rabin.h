@@ -402,7 +402,7 @@ class test_runner_t {
           CUDA_CHECK(cudaStreamSynchronize(runner_stream));
           CGBN_CHECK(report);
 
-          for (size_t i = 0; i < tests.size(); i++) {
+          for (size_t i = 0; i < to_run; i++) {
               results[i] = (instances[i].passed == rounds);
           }
       }

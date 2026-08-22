@@ -265,22 +265,32 @@ class GPUBatch {
 
 class OverflowBatch {
     public:
+        const uint32_t N = 4096;
+
         // TODO parametrize this number.
-        GPUBatch gpu_batch{4096};
+        GPUBatch gpu_batch{N};
 
-        // Current index.
-        size_t i;
+        // Start looking for a non-active entry here
+        size_t i = 0;
+        size_t added = 0;
 
-        // x_i and sieve_start
-        vector<std::pair<uint16_t, uint16_t>> current_x_i;
+        // m, current coprime_X index, sieve_start
+        vector<std::tuple<uint64_t, uint16_t, uint16_t>> data;
         // Optimized for less handling, could be 10x smaller by changing to bitset over coprime_x.
         vector<vector<uint8_t>> composite_tmp;
 
         OverflowBatch()  {
-            i = 0;
             size_t n = gpu_batch.m_i.size();
             composite_tmp.resize(n);
-            current_x_i.resize(n);
+            data.resize(n);
+        }
+
+        void remove_entry(size_t j) {
+            gpu_batch.active[j] = 0;
+            added--;
+            if (j < i) {
+                i = j;
+            }
         }
 
         OverflowBatch(const OverflowBatch&) = delete;

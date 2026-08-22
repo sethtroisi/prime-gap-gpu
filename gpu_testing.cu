@@ -196,6 +196,22 @@ inline void fill_batch(
 
 
 /**
+ * TODO I want overflow to own runner without needing cuda compilation
+ * Is there a forward declaration or point to implementation?
+ */
+typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
+test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+
+void one_shot_batch(GPUBatch& batch) {
+#ifndef GPU_TESTING
+    assert(false);
+#endif // !GPU_TESTING
+
+    // run batch on gpu and wait for results to be set
+    runner.run_test(batch.i, batch.z, batch.result);
+}
+
+/**
  * Starts a CPU thread that handles launching CUDA kernels for primality tests.
  * Multiple of these threads exist, one for each GPUBatch.
  * communicates with testing_thread via batch (GPUBatch)
@@ -270,7 +286,7 @@ void run_gpu_thread(int runner_num, int verbose,
             if (verbose >= 4)
                 printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
 
-            // Run batch on GPU and wait for results to be set
+            // run batch on gpu and wait for results to be set
             runner.run_test(batch.i, batch.z, batch.result);
 
             if (verbose >= 4)
