@@ -466,11 +466,11 @@ void run_sieve_thread(void) {
                         d_primes.push_back(prime);
                     continue;
                 }
-                const uint32_t base_r = mpz_fdiv_ui(K, prime);
+                const uint64_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 < base_r && base_r < prime );
-                const int32_t inv_K = _invert(base_r, prime);
+                const int64_t inv_K = _invert(base_r, prime);
                 assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
-                assert( ((uint64_t) inv_K * base_r) % prime == 1 );
+                assert( (inv_K * base_r) % prime == 1 );
                 // Never sieve less than this.
                 if (prime < 100'000) {
                     p_and_neg_inverse_k_small.emplace_back((uint32_t) prime, prime - inv_K);
@@ -511,7 +511,7 @@ void run_sieve_thread(void) {
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
-            uint32_t X = sieve_data->current_sieve_x;
+            uint64_t X = sieve_data->current_sieve_x;
             const auto state = sieve_data->state;
             if (state == SieveData::FIRST_SIEVE) {
                 total_m += m_inc;
@@ -596,7 +596,7 @@ void run_sieve_thread(void) {
                 wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
             }
 
-            uint32_t prime = 0;
+            uint64_t prime = 0;
             for( const auto& [p, neg_inv_K] : p_and_neg_inverse_k_small) {
                 prime = p;
                 // if ((m * K + X) % p == 0) {
@@ -606,7 +606,7 @@ void run_sieve_thread(void) {
 
                 uint64_t m_start_shift = m_start % prime;
                 m_start_shift = prime - m_start_shift;
-                uint64_t mi_0 = ((uint64_t) X * neg_inv_K + m_start_shift) % prime;
+                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
 
                 // This requires K odd and m_start even (both checked above)
                 // See 1ba32111 for more details.
@@ -628,7 +628,7 @@ void run_sieve_thread(void) {
              *      No effect.
              */
 
-            uint32_t neg_inv_K;
+            uint64_t neg_inv_K;
             if (X * config.max_prime < m_start) {
                 for (uint32_t p_i = 0; p_i < max_p_i; p_i++) {
                     const auto& t = p_and_neg_inverse_k[p_i];
@@ -725,17 +725,17 @@ void run_sieve_thread(void) {
                 finalize_time += finalize_duration_t;
                 total_time += finalize_duration_t;
 
-                // Finalize range
+                // Move to next range.
                 sieve_data->sieve_x_i++;
                 sieve_data->current_sieve_x = sieve_data->coprime_X[sieve_data->sieve_x_i];
                 if (state == SieveData::FIRST_SIEVE) {
-                    // Mark as active after next_sieves is set
+                    // Mark as active after next_sieves is set.
                     sieve_data->state = SieveData::ACTIVE;
                 }
             }
 
             if ((config.verbose + (X <= 2) + (config.m_start <= 1'000'000)) >= 3) {
-                printf("\tCPU Sieve @X=%u with %u/%u (%.0f%%) unknown/active prime=%u"
+                printf("\tCPU Sieve @X=%lu with %u/%u (%.0f%%) unknown/active last prime=%lu"
                        " took %.3f (wheel: %.3f) + %.3f seconds\n",
                        X, unknowns_size, active_size,
                        100.0 * unknowns_size / active_size,
