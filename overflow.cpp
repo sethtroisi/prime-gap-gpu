@@ -52,6 +52,7 @@ bool overflow_should_run() {
 /**
  * [X] do sieve here. (+15-20%)
  * Store test_x_i, composite in struct
+ *     Consider if all overflow should happen at a fixed x_i (maype set in the first sieve)
  * Create OverflowBatch with 4096 structs
  * New FillBatch -> GPUBatch
  * Access to runner.run_test in gpu_testing
@@ -59,10 +60,14 @@ bool overflow_should_run() {
  */
 
 /** Globals for this class */
+
 vector<uint16_t> coprime_X;
-//vector<uint32_t> d_primes;
+// coprime_X[coprime_lookup[t]] >= t
+vector<uint16_t> next_coprime_index;
 vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
 vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
+
+OverflowBatch overflow_batch;
 
 
 void setup_overflow(const struct Config config) {
@@ -74,9 +79,21 @@ void setup_overflow(const struct Config config) {
         for (const auto x : X) {
             coprime_X.push_back(x);
         }
+
+        next_coprime_index.resize(coprime_X.back() + 1, 0xFFFF);
+        uint16_t i = 0;
+        for (uint16_t x_i = 0; x_i < coprime_X.size(); x_i++) {
+            for ( ; i <= coprime_X[x_i]; i++ ) {
+                next_coprime_index[i] = x_i;
+            }
+        }
+        for (i = 0; i < next_coprime_index.size(); i++) {
+            assert( coprime_X[next_coprime_index[i]] >= i );
+        }
     }
 
-    // TODO d wheel to speed this up a fraction.
+
+    // TODO d wheel to speed up sieve_interval_cpu.
 
     mpz_t K;
     init_K(config, K);
@@ -104,6 +121,7 @@ void setup_overflow(const struct Config config) {
 /**
  * [sieve_start, sieve_start + sieve_length)
  */
+static
 void sieve_interval_cpu(const uint64_t m,
         const uint32_t sieve_start,
         const uint32_t sieve_length,
@@ -137,16 +155,15 @@ void sieve_interval_cpu(const uint64_t m,
     }
 }
 
+static
 uint32_t next_prime_distance(
         const uint64_t m, const uint64_t min_x,
         const mpz_t &K, mpz_t &center, mpz_t &tmp,
-        vector<uint8_t> &composite_tmp) {
+        vector<uint8_t> &composite_tmp,
+        TestingStats &stats) {
+    auto s_start_t = high_resolution_clock::now();
 
-    // TODO something better than this
-    uint32_t min_x_i = std::distance(
-            coprime_X.begin(),
-            std::upper_bound(coprime_X.begin(), coprime_X.end(), min_x - 1));
-
+    uint32_t min_x_i = next_coprime_index[min_x];
     uint32_t next_possible_x = coprime_X[min_x_i];
 
     assert( 1 <= min_x_i && min_x_i < coprime_X.size() );
@@ -156,6 +173,9 @@ uint32_t next_prime_distance(
     sieve_interval_cpu(
         m, next_possible_x, coprime_X.back() - next_possible_x + 1,
         composite_tmp);
+
+    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.d_next_prime_sieve += total_s;
 
     mpz_mul_ui(center, K, m);
 
@@ -175,6 +195,102 @@ uint32_t next_prime_distance(
     mpz_nextprime(tmp, tmp);
     mpz_sub(tmp, tmp, center);
     return mpz_get_ui(tmp);
+}
+
+static
+void process_result(
+        const float min_merit,
+        const double K_log, const uint32_t P, const uint32_t D,
+        const mpz_t &K, mpz_t &center,
+
+        const uint64_t m,
+        double merit, uint64_t gap, uint64_t prev_gap,
+        mpz_t &next_p, mpz_t &prev_p,
+        mpz_t &tmp, mpz_t &tmp2,
+        TestingStats &stats,
+        std::unique_lock<std::mutex> &lock,
+        std::ofstream &record_stream) {
+
+    if (merit > min_merit) {
+        stats.greater_than_min_merit++;
+        // Double check, we only performed a single round of rabin miller on many numbers.
+        mpz_mul_ui(center, K, m);
+        mpz_sub_ui(prev_p, center, prev_gap);
+        mpz_nextprime(next_p, prev_p);
+        mpz_sub(next_p, next_p, prev_p);
+        uint64_t test_gap = mpz_get_ui(next_p);
+        if (test_gap != gap) {
+            // These numbers are marked "prime" by GPU because we only do 1 round.
+            mpz_sub_ui(tmp, next_p, 1);
+            mpz_set_ui(tmp2, 2);
+            // Check if mismatch is Fermat pseudoprime base 2 <=> 2^(np-1) % np = 1
+            mpz_powm(tmp, tmp2, tmp, next_p);
+            if ( mpz_cmp_ui(tmp, 1) == 0) {
+                stats.pseudoprimes++;
+                printf("\tFermat Pseuodprime: %lu * %u# / %u + %lu\n",
+                        m, P, D, test_gap - prev_gap);
+            } else {
+                stats.mismatches++;
+                printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u + %lu\n",
+                        test_gap, gap, m, P, D, test_gap - prev_gap);
+            }
+            merit = test_gap / (K_log + log(m));
+        }
+
+        if (merit > min_merit) {
+            std::string record = std::format(
+                    "{} {:.3f} {} * {}# / {} - {}",
+                    gap, merit, m, P, D, prev_gap);
+            cout << record << endl;
+
+            lock.lock();
+            record_stream << record << endl;
+            lock.unlock();
+        }
+    }
+}
+
+// gap, prev_gap, merit
+static
+std::tuple<uint64_t, uint64_t, double> run_tests_on_cpu(
+        const float MIN_GAP_TO_CONTINUE,
+        const double K_log,
+        const uint64_t m, const uint64_t min_x,
+        const mpz_t &K, mpz_t &center,
+        mpz_t &next_p, mpz_t &prev_p,
+        mpz_t &tmp,
+        vector<uint8_t> &composite_tmp,
+        TestingStats &stats) {
+
+    auto s_start_t = high_resolution_clock::now();
+    uint64_t next_gap = 0;
+    if (0) {
+        mpz_mul_ui(center, K, m);
+        mpz_add_ui(next_p, center, min_x);
+        mpz_nextprime(next_p, next_p);
+        mpz_sub(next_p, next_p, center);
+        next_gap = mpz_get_ui(next_p);
+    } else {
+        next_gap = next_prime_distance(
+                m, min_x,
+                K, center, tmp,
+                composite_tmp, stats);
+    }
+    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.d_next_prime += total_s;
+
+    if (next_gap < MIN_GAP_TO_CONTINUE) {
+        stats.skipped_prev++;
+        return {next_gap, 0, 0};
+    }
+
+    stats.tested_prev++;
+    mpz_prevprime(prev_p, center);
+    mpz_sub(prev_p, center, prev_p);
+    uint64_t prev_gap = mpz_get_ui(prev_p);
+    uint64_t gap = prev_gap + next_gap;
+    double merit = gap / (K_log + log(m));
+    return {gap, prev_gap, merit};
 }
 
 
@@ -206,7 +322,6 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
 
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
-
 
         std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
@@ -264,81 +379,32 @@ void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
                 auto m = m_and_x.first;
                 auto min_x = m_and_x.second;
 
-                auto s_start_t = high_resolution_clock::now();
-                uint64_t next_gap = 0;
-                if (0) {
-                    mpz_mul_ui(center, K, m);
-                    mpz_add_ui(next_p, center, min_x);
-                    mpz_nextprime(next_p, next_p);
-                    mpz_sub(next_p, next_p, center);
-                    next_gap = mpz_get_ui(next_p);
-                } else {
-                    next_gap = next_prime_distance(
-                            m, min_x,
-                            K, center, tmp,
-                            composite_tmp);
-                }
-                double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-                stats.d_next_prime += total_s;
+                const auto& [gap, prev_gap, merit] = run_tests_on_cpu(
+                        MIN_GAP_TO_CONTINUE, K_log,
+                        m, min_x, K,
+                        center, next_p, prev_p,
+                        tmp, composite_tmp, stats);
 
-                if (next_gap < MIN_GAP_TO_CONTINUE) {
-                    stats.skipped_prev++;
-                } else {
-                    stats.tested_prev++;
-                    mpz_prevprime(prev_p, center);
-                    mpz_sub(prev_p, center, prev_p);
-                    uint64_t prev_gap = mpz_get_ui(prev_p);
-                    uint64_t gap = prev_gap + next_gap;
-                    double merit = gap / (K_log + log(m));
+                process_result(
+                        min_merit, K_log, P, D, K, center,
+                        m, merit, gap, prev_gap,
+                        next_p, prev_p, tmp, tmp2, stats,
+                        lock, record_stream);
 
-                    if (merit > min_merit) {
-                        stats.greater_than_min_merit++;
-                        // Double check, we only performed a single round of rabin miller on many numbers.
-                        mpz_sub_ui(prev_p, center, prev_gap);
-                        mpz_nextprime(next_p, prev_p);
-                        mpz_sub(next_p, next_p, prev_p);
-                        uint64_t test_gap = mpz_get_ui(next_p);
-                        if (test_gap != gap) {
-                            // These numbers are marked "prime" by GPU because we only do 1 round.
-                            mpz_sub_ui(tmp, next_p, 1);
-                            mpz_set_ui(tmp2, 2);
-                            // Check if mismatch is Fermat pseudoprime base 2 <=> 2^(np-1) % np = 1
-                            mpz_powm(tmp, tmp2, tmp, next_p);
-                            if ( mpz_cmp_ui(tmp, 1) == 0) {
-                                stats.pseudoprimes++;
-                                printf("\tFermat Pseuodprime: %lu * %u# / %u + %lu\n",
-                                        m, P, D, test_gap - prev_gap);
-                            } else {
-                                stats.mismatches++;
-                                printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u + %lu\n",
-                                        test_gap, gap, m, P, D, test_gap - prev_gap);
-                            }
-                            merit = test_gap / (K_log + log(m));
-                        }
-
-                        if (merit > min_merit) {
-                            std::string record = std::format(
-                                    "{} {:.3f} {} * {}# / {} - {}",
-                                    gap, merit, m, P, D, prev_gap);
-                            cout << record << endl;
-
-                            lock.lock();
-                            record_stream << record << endl;
-                            lock.unlock();
-                        }
-                    }
-                }
 
                 lock.lock();
             }
         }
 
         if (i == 0 && og_config.verbose >= 1) {
+            float EPS = 1.0 * (stats.tested > 0);
             printf("\nCPU OVERFLOW Timing:\n");
-            printf("\ttotal tested   : %lu (%.5f/next_prime)\n",
-                    stats.tested.load(), stats.d_next_prime / (0.01 + stats.tested));
+            printf("\ttotal tested   : %lu (%.6f/sieve, %.5f/next_prime)\n",
+                    stats.tested.load(),
+                    stats.d_next_prime_sieve / (EPS + stats.tested),
+                    stats.d_next_prime / (EPS + stats.tested));
             printf("\tspot checked   : %lu (%.6f/prob_prime)\n",
-                    stats.spot_checked.load(), stats.d_spot_check / (0.01 + stats.spot_checked));
+                    stats.spot_checked.load(), stats.d_spot_check / (EPS + stats.spot_checked));
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
             uint32_t large = stats.greater_than_min_merit;

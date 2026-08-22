@@ -203,7 +203,7 @@ class GPUBatch {
         time_point<high_resolution_clock> results_start;
         time_point<high_resolution_clock> results_end;
 
-        // current index;
+        // current index.
         size_t i;
 
         // testing 'm * K + x'
@@ -261,4 +261,28 @@ class GPUBatch {
         std::atomic<int> flag;
 
         size_t elements;
+};
+
+class OverflowBatch {
+    public:
+        // TODO parametrize this number.
+        GPUBatch gpu_batch{4096};
+
+        // Current index.
+        size_t i;
+
+        // x_i and sieve_start
+        vector<std::pair<uint16_t, uint16_t>> current_x_i;
+        // Optimized for less handling, could be 10x smaller by changing to bitset over coprime_x.
+        vector<vector<uint8_t>> composite_tmp;
+
+        OverflowBatch()  {
+            i = 0;
+            size_t n = gpu_batch.m_i.size();
+            composite_tmp.resize(n);
+            current_x_i.resize(n);
+        }
+
+        OverflowBatch(const OverflowBatch&) = delete;
+        OverflowBatch& operator=(const OverflowBatch&) = delete;
 };
