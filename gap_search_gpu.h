@@ -19,9 +19,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <mutex>
-#include <queue>
 #include <tuple>
 #include <unistd.h>
 #include <utility>
@@ -32,7 +30,6 @@
 #include "gap_common.h"
 #include "gap_stats.h"
 
-using std::deque;
 using std::vector;
 using namespace std::chrono;
 
@@ -53,13 +50,9 @@ extern std::atomic<uint8_t> stop_queue;
  */
 
 extern std::mutex overflow_mtx;
-// deque (double ended queue) avoids a degenerate case of large gap getting stuck
-// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
-extern deque<std::pair<uint64_t, uint32_t>> overflowed;
-// M * K + X which was marked prime by GPU. should be prime 100% of time.
-extern deque<std::pair<uint64_t, uint32_t>> spot_check;
 extern std::condition_variable overflow_cv;
 
+// Overflow glabls in overflow.h
 
 class TestData {
     public:
@@ -261,38 +254,4 @@ class GPUBatch {
         std::atomic<int> flag;
 
         size_t elements;
-};
-
-class OverflowBatch {
-    public:
-        const uint32_t N = 4096;
-
-        // TODO parametrize this number.
-        GPUBatch gpu_batch{N};
-
-        // Start looking for a non-active entry here
-        size_t i = 0;
-        size_t added = 0;
-
-        // m, current coprime_X index, sieve_start
-        vector<std::tuple<uint64_t, uint16_t, uint16_t>> data;
-        // Optimized for less handling, could be 10x smaller by changing to bitset over coprime_x.
-        vector<vector<uint8_t>> composite_tmp;
-
-        OverflowBatch()  {
-            size_t n = gpu_batch.m_i.size();
-            composite_tmp.resize(n);
-            data.resize(n);
-        }
-
-        void remove_entry(size_t j) {
-            gpu_batch.active[j] = 0;
-            added--;
-            if (j < i) {
-                i = j;
-            }
-        }
-
-        OverflowBatch(const OverflowBatch&) = delete;
-        OverflowBatch& operator=(const OverflowBatch&) = delete;
 };

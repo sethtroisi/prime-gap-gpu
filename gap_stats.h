@@ -58,7 +58,6 @@ class StatsCounters {
         uint64_t    s_total_next_p = 0;
 };
 
-
 class TestingStats {
     public:
         std::atomic<uint64_t> tested = 0;

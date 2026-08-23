@@ -19,11 +19,9 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <deque>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -59,7 +57,6 @@
 using std::cout;
 using std::cerr;
 using std::endl;
-using std::deque;
 using std::vector;
 using namespace std::chrono;
 
@@ -86,17 +83,6 @@ std::atomic<uint8_t> stop_queue{0};
 // Don't read from sieve_data without holding sieve_mtx
 std::mutex sieve_mtx;
 std::unique_ptr<SieveData> sieve_data;
-
-std::mutex overflow_mtx;
-std::condition_variable overflow_cv;
-
-// deque (double ended queue) avoids a degenerate case of large gap getting stuck
-// if this can't keep up. Try to avoid falling behind, but this is an extra safety.
-deque<std::pair<uint64_t, uint32_t>> overflowed;
-// M * K + X which was marked prime by GPU. should be prime 100% of time.
-deque<std::pair<uint64_t, uint32_t>> spot_check;
-
-
 
 //*************************************************************************** //
 
@@ -866,7 +852,7 @@ void run_testing_thread(const struct Config og_config) {
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
-        std::deque<GPUBatch> gpu_batches;
+        std::vector<GPUBatch> gpu_batches;
         for (uint32_t i = 0; i < GPU_BATCHES; i++) {
             gpu_batches.emplace_back(GPU_BATCH_SIZE);
         }
@@ -1070,7 +1056,7 @@ void prime_gap_test(struct Config config) {
     sieve_data = std::make_unique<SieveData>(config);
 
     // This has output that's nicer close to the top.
-    std::thread testing_thread(run_testing_thread, config);
+    std::thread testing_thread{run_testing_thread, config};
     usleep(50'000); // 50ms
 
     // Setup
@@ -1093,12 +1079,8 @@ void prime_gap_test(struct Config config) {
 
     TestingStats test_stats;
     setup_overflow(config);
-    vector<std::thread> overflow_threads;
-    for(size_t i = 0; i < (unsigned)config.cpu_threads; i++) {
-        overflow_threads.emplace_back(
-                run_cpu_overflow_thread,
-                i, std::ref(config), std::ref(K), std::ref(test_stats));
-    }
+    std::thread overflow_coordinator_thread{
+        std::ref(config), std::ref(K), std::ref(test_stats)};
 
     while (is_running && stop_queue == 0) {
         usleep(50'000); // 50ms
@@ -1121,12 +1103,8 @@ void prime_gap_test(struct Config config) {
             cout << "\ttesting joined" << endl;
 
         overflow_cv.notify_all();  // wake up all overflow thread
-        for (auto& thread : overflow_threads) {
-            thread.join();
-        }
-        overflow_threads.clear();
-        if (config.verbose >= 3)
-            cout << "\tAll CPU overflows joined" << endl;
+        overflow_coordinator_thread.join();
+        cout << "\toverflow joined" << endl;
     }
 
     mpz_clear(K);

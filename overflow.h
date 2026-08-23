@@ -14,15 +14,79 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 
 #include <gmp.h>
 
 #include "gap_common.h"
 #include "gap_stats.h"
 
+
+struct Overflow {
+    uint64_t m;
+
+    /**
+     * NEXT_PRIME: m * K + x, x >= d
+     * SPOT_CHECK: m * X + d
+     * PREV_PRIME: d is next_gap (e.g. positive x such that m * K + x is prime)
+     */
+    uint32_t d;
+
+    enum class Type : uint8_t {
+        NEXT_PRIME, SPOT_CHECK, PREV_PRIME
+    } type;
+};
+
+class OverflowQueue {
+    public:
+        void lock();
+        void unlock();
+
+        std::atomic<uint32_t> size;
+        std::deque<Overflow> queue;
+
+        void push_to_queue(uint64_t m, uint32_t d, Overflow::Type type) {
+            lock();
+            queue.emplace_back(m, d, type);
+            size++;
+            unlock();
+        }
+
+        Overflow wait_and_get() {
+            // TODO how to handle stop_queue and is_running
+            while (true) {
+                size.wait(0);
+                lock();
+                if (size > 0) {
+                    // TODO not sure how to do this better
+                    Overflow e = queue.front();
+                    queue.pop_front();
+                    unlock();
+                    return e;
+                }
+                unlock();
+            }
+        }
+
+    private:
+        // For signaling, must be owned to change state.
+        /**
+         * :wait(0) -> unlock
+         * -> set to 1 to lock with a check?
+         */
+        std::atomic<int> flag;
+};
+
+/**
+ * TODO just pass this to run_cpu_overflow_thread
+ */
+extern OverflowQueue overflow;
+
 // Must be called before run_cpu_overflow_thread
 void setup_overflow(const struct Config config);
 
-void run_cpu_overflow_thread(uint32_t i, const struct Config og_config,
+void run_cpu_overflow_thread(const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats);
