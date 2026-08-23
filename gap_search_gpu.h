@@ -49,10 +49,7 @@ extern std::atomic<uint8_t> stop_queue;
          wait for overflow to finish
  */
 
-extern std::mutex overflow_mtx;
-extern std::condition_variable overflow_cv;
-
-// Overflow glabls in overflow.h
+// Overflow globals in overflow.h
 
 class TestData {
     public:

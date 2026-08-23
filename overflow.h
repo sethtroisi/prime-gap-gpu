@@ -36,18 +36,29 @@ struct Overflow {
     uint32_t d;
 
     enum class Type : uint8_t {
-        NEXT_PRIME, SPOT_CHECK, PREV_PRIME
+        NEXT_PRIME, PREV_PRIME, SPOT_CHECK,
     } type;
 };
 
 class OverflowQueue {
     public:
-        void lock();
-        void unlock();
+        void lock() {
+            while (flag.exchange(1) == 1) {
+                flag.wait(1, std::memory_order_relaxed);
+            }
+        }
 
+        void unlock() {
+            assert(flag.load() == 1); // locked (because we own it)
+            flag = 0;
+            flag.notify_one();
+        }
+
+        // TODO would be nice for this to be read only
         std::atomic<uint32_t> size;
         std::deque<Overflow> queue;
 
+        /** should call notify_one most of the time this is called */
         void push_to_queue(uint64_t m, uint32_t d, Overflow::Type type) {
             lock();
             queue.emplace_back(m, d, type);
@@ -64,6 +75,7 @@ class OverflowQueue {
                     // TODO not sure how to do this better
                     Overflow e = queue.front();
                     queue.pop_front();
+                    size--;
                     unlock();
                     return e;
                 }
@@ -88,5 +100,4 @@ extern OverflowQueue overflow;
 // Must be called before run_cpu_overflow_thread
 void setup_overflow(const struct Config config);
 
-void run_cpu_overflow_thread(const struct Config og_config,
-                             const mpz_t &K_in, TestingStats &stats);
+void run_overflow_coordinator_thread(const struct Config og_config);

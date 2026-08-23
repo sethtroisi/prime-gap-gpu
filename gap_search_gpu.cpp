@@ -22,6 +22,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -772,7 +773,6 @@ void run_sieve_thread(void) {
 static
 void signal_stop_to_everyone() {
     is_running = false;
-    overflow_cv.notify_all();  // wake up all overflow thread
     sieve_data->sieves_ready = OPEN_SIEVES / 2;
     sieve_data->sieves_ready.notify_all();
 }
@@ -790,23 +790,24 @@ void SieveData::push_to_overflow_and_increment_M_range() {
                 m_start, m_start + m_inc,
                 active_m_i.size(),
                 current_testing_x);
-        if (overflowed.size())
-            printf(" (current: %lu)", overflowed.size());
+        // Not as useful given that most things don't live in this queue
+        if (overflow.size)
+            printf(" (queue had %u already)", overflow.size.load());
         printf("\n");
     }
 
-    std::lock_guard lock(overflow_mtx);
+    overflow.lock();
     for (uint32_t m_i : active_m_i) {
-        overflowed.emplace_back(m_start + m_i, min_X);
+        // TODO only hold lock once
+        overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);
     }
+    overflow.unlock();
+    overflow.size.notify_one();
 
     config.m_start += m_inc;
     state = SieveData::NEW;
 
     setup_sieve_data(stop_queue > 0);
-
-    // CPU sieving thread will start if unlocked and notified
-    overflow_cv.notify_all();
 }
 
 static
@@ -852,7 +853,7 @@ void run_testing_thread(const struct Config og_config) {
 
         /* Note: Uses a double batched system
          * C++ Thread is preparing batch_a (even more m), while GPU runs batch_b */
-        std::vector<GPUBatch> gpu_batches;
+        std::deque<GPUBatch> gpu_batches;
         for (uint32_t i = 0; i < GPU_BATCHES; i++) {
             gpu_batches.emplace_back(GPU_BATCH_SIZE);
         }
@@ -1077,10 +1078,8 @@ void prime_gap_test(struct Config config) {
     }
     std::thread sieve_thread(run_sieve_thread);
 
-    TestingStats test_stats;
     setup_overflow(config);
-    std::thread overflow_coordinator_thread{
-        std::ref(config), std::ref(K), std::ref(test_stats)};
+    std::thread overflow_coordinator_thread{run_overflow_coordinator_thread, std::ref(config)};
 
     while (is_running && stop_queue == 0) {
         usleep(50'000); // 50ms
@@ -1088,6 +1087,13 @@ void prime_gap_test(struct Config config) {
 
     if (!is_running) {
         signal_stop_to_everyone();
+        uint32_t old_size = overflow.size;
+        // How to make sure overflow thread wakes up from wait?
+        overflow.size = 1;
+        overflow.size.notify_all();
+        overflow.size = 0;
+        overflow.size.notify_all();
+        overflow.size = old_size;
     }
 
     if (config.verbose >= 3)
@@ -1102,7 +1108,8 @@ void prime_gap_test(struct Config config) {
         if (config.verbose >= 3)
             cout << "\ttesting joined" << endl;
 
-        overflow_cv.notify_all();  // wake up all overflow thread
+        // TODO maybe more is needed here?
+        overflow.size.notify_all();  // wake up all overflow thread
         overflow_coordinator_thread.join();
         cout << "\toverflow joined" << endl;
     }

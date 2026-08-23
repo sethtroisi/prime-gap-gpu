@@ -44,16 +44,6 @@ using std::cerr;
 using std::endl;
 using namespace std::chrono;
 
-/**
- * [X] do sieve here. (+15-20%)
- * Store test_x_i, composite in struct
- *     Consider if all overflow should happen at a fixed x_i (maype set in the first sieve)
- * Create OverflowBatch with 4096 structs
- * New FillBatch -> GPUBatch
- * Access to runner.run_test in gpu_testing
- * Handle prev prime the same way or ???
- */
-
 /** Extern globals */
 
 OverflowQueue overflow;
@@ -124,6 +114,7 @@ void setup_overflow(const struct Config config) {
         }
     }
 }
+
 
 static
 void process_result(
@@ -439,13 +430,16 @@ uint32_t run_overflow_batch(
             }
             if (x_i >= M) {
                 overflow_batch.remove_entry(i);
-                found_primes++; // TODO Kinda a lie?
+                found_primes++; // TODO Kinda a lie, different name
 
                 // TODO Push to some temp queue then unlock only once.
                 worker_queue.push_to_queue(m, last_x+1, Overflow::Type::NEXT_PRIME);
             }
         }
     }
+
+    if (found_primes)
+        worker_queue.size.notify_all();
 
     //printf("\tRan overflow on GPU found: %lu primes\n", overflow_batch.N - overflow_batch.added);
     return found_primes;
@@ -491,7 +485,8 @@ void run_tests_on_cpu(
 }
 
 
-void run_cpu_overflow_helper(const struct Config og_config,
+void run_cpu_overflow_helper(const int thread_index,
+                             const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
     mpz_t K, center, next_p, prev_p, tmp, tmp2;
     mpz_init_set(K, K_in);
@@ -501,22 +496,41 @@ void run_cpu_overflow_helper(const struct Config og_config,
     const uint32_t P = og_config.p;
     const uint32_t D = og_config.d;
 
-    //std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
+    double K_log = calc_log_K(og_config);
+    const float min_merit = og_config.min_merit;
+
+    // TODO how to keep in sync with below?
+    // See THEORY.md! Added const is small preference for doing less prev_p.
+    const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
+    const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(og_config.m_inc));
+
+    vector<uint8_t> composite_tmp;
+    std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
     while (true) {
         auto [m, d, type] = worker_queue.wait_and_get();
-        if (!is_running) {
+        if (!is_running || (stop_queue >= 2 && worker_queue.size == 0)) {
             break;
         }
 
         if (type == Overflow::Type::PREV_PRIME) {
 
+            uint32_t next_gap = d;
             mpz_mul_ui(center, K, m);
-            // handle_next_prime_result(
-            //     MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
-            //     K, center,
-            //     m, next_gap,
-            //     next_p, prev_p, tmp, tmp2, stats, record_stream);
+            handle_next_prime_result(
+                MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
+                K, center,
+                m, next_gap,
+                next_p, prev_p, tmp, tmp2, stats, record_stream);
+
+        } else if (type == Overflow::Type::NEXT_PRIME) {
+
+            uint32_t min_x = d;
+            run_tests_on_cpu(
+                MIN_GAP_TO_CONTINUE, min_merit,
+                K_log, P, D,
+                m, min_x,
+                K, center, next_p, prev_p, tmp, tmp2, composite_tmp, stats, record_stream);
 
         } else if (type == Overflow::Type::SPOT_CHECK) {
 
@@ -535,25 +549,6 @@ void run_cpu_overflow_helper(const struct Config og_config,
             }
             double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
             stats.d_spot_check += total_s;
-
-        } else if (type == Overflow::Type::NEXT_PRIME) {
-
-            uint32_t x = d;
-            stats.tested++;
-            stats.tested_cpu++;
-            auto s_start_t = high_resolution_clock::now();
-            mpz_mul_ui(center, K, m);
-            mpz_add_ui(next_p, center, x);
-            mpz_nextprime(next_p, next_p);
-            mpz_sub(tmp, next_p, center);
-            //uint32_t next_gap = mpz_get_ui(tmp);
-            stats.d_next_prime_cpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
-            // handle_next_prime_result(
-            //     MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
-            //     K, center,
-            //     m, next_gap,
-            //     next_p, prev_p, tmp, tmp2, stats, record_stream);
-
         } else {
             printf("Unknown element.type: %u\n", (uint8_t) type);
         }
@@ -561,14 +556,17 @@ void run_cpu_overflow_helper(const struct Config og_config,
 
     mpz_clear(K);
     mpz_clears(center, next_p, prev_p, tmp, tmp2, NULL);
+    if (og_config.verbose >= 3) {
+        usleep(thread_index * 10'000); // X0ms
+        printf("\tCPU overflow(%u) done\n", thread_index);
+    }
 }
 
 
 
 uint32_t USE_GPU_FOR_OVERFLOW = true;
 
-void run_cpu_overflow_thread(const struct Config og_config,
-                             const mpz_t &K_in, TestingStats &stats) {
+void run_overflow_coordinator_thread(const struct Config og_config) {
     try {
         {
             pthread_setname_np(pthread_self(), "OVERFLOW_PRIMARY\n");
@@ -576,18 +574,17 @@ void run_cpu_overflow_thread(const struct Config og_config,
                                     // Helpers run at much lower
         }
 
+        TestingStats stats;
         OverflowBatch overflow_batch;
 
         // Pre-allocated
         mpz_t K, center, next_p, prev_p, tmp, tmp2;
-        mpz_init_set(K, K_in);
+        init_K(og_config, K);
         mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
         vector<uint8_t> composite_tmp;
 
         double K_log = calc_log_K(og_config);
         const float min_merit = og_config.min_merit;
-        const uint32_t P = og_config.p;
-        const uint32_t D = og_config.d;
 
         // See THEORY.md! Added const is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
@@ -596,12 +593,21 @@ void run_cpu_overflow_thread(const struct Config og_config,
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
+        std::vector<std::thread> worker_threads;
+        for (int i = 0; i < og_config.cpu_threads; i++) {
+            worker_threads.emplace_back(
+                run_cpu_overflow_helper,
+                i, std::ref(og_config), std::ref(K), std::ref(stats)
+            );
+        }
+
         while (is_running) {
+            if (stop_queue == 2 and overflow.size == 0) {
+                break;
+            }
+
             // Wait till size is not zero
             overflow.size.wait(0);
-
-            if (stop_queue == 2 && overflow.size == 0 && overflow_batch.added == 0)
-                break;
 
             overflow.lock();
             while (is_running && overflow.size) {
@@ -686,14 +692,18 @@ void run_cpu_overflow_thread(const struct Config og_config,
                         worker_queue.push_to_queue(m, next_x, Overflow::Type::NEXT_PRIME);
                     }
                     overflow_batch.remove_entry(i);
+                    worker_queue.size.notify_all();
                 }
             }
         }
 
         worker_queue.size.wait(0);
-        // Something something join
 
-        if (i == 0 && og_config.verbose >= 1) {
+        for (auto &worker : worker_threads) {
+            worker.join();
+        }
+
+        if (og_config.verbose >= 1) {
             float EPS = 1.0 * (stats.tested > 0);
             printf("\nCPU OVERFLOW Timing:\n");
             printf("\ttotal tested   : %lu (%.1f%% CPU, %.1f%% GPU)\n",
@@ -731,11 +741,6 @@ void run_cpu_overflow_thread(const struct Config og_config,
                         stats.tested_gpu.load(), missing);
             }
             printf("\n");
-        }
-
-        if (og_config.verbose >= 3) {
-            usleep(i * 10'000); // i * 10ms
-            printf("\tCPU overflow(%u) done\n", i);
         }
 
         mpz_clear(K);

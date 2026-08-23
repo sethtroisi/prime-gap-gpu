@@ -251,7 +251,7 @@ def print_record_gaps(args, gaps):
                     records.sort()
                 print()
                 for k, (plus, old) in records:
-                    print("\t", f"{k:5} +{plus:.2f} {old[0]} improves {old[2]} by {old[3]}")
+                    print("\t", f"{k:5} +{plus:.2f} {old[0]:.4f} improves {old[2]} by {old[3]}")
 
             print()
             print("Records {} unique {} {}".format(

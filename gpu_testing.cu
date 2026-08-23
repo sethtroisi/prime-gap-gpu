@@ -59,6 +59,7 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
 // Always use 1.
+// TODO try simplifying miller_rabin and see if it changes speed.
 const int ROUNDS = 1;
 
 
