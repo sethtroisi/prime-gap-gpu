@@ -485,9 +485,14 @@ void run_tests_on_cpu(
 }
 
 
-void run_cpu_overflow_helper(const int thread_index,
+void run_cpu_overflow_worker(const int thread_index,
                              const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
+    {
+        std::string name = std::format("CPU_WORKER_{}", thread_index);
+        pthread_setname_np(pthread_self(), name.c_str());
+        std::ignore = nice(+10);
+    }
     mpz_t K, center, next_p, prev_p, tmp, tmp2;
     mpz_init_set(K, K_in);
     mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
@@ -509,7 +514,7 @@ void run_cpu_overflow_helper(const int thread_index,
 
     while (true) {
         auto [m, d, type] = worker_queue.wait_and_get();
-        if (!is_running || (stop_queue >= 2 && worker_queue.size == 0)) {
+        if (!is_running || type == Overflow::Type::STOP_WORKER) {
             break;
         }
 
@@ -569,7 +574,7 @@ uint32_t USE_GPU_FOR_OVERFLOW = true;
 void run_overflow_coordinator_thread(const struct Config og_config) {
     try {
         {
-            pthread_setname_np(pthread_self(), "OVERFLOW_PRIMARY\n");
+            pthread_setname_np(pthread_self(), "CPU_OVERFLOW");
             std::ignore = nice(+1); // Lower priority a tiny bit
                                     // Helpers run at much lower
         }
@@ -596,79 +601,88 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
         std::vector<std::thread> worker_threads;
         for (int i = 0; i < og_config.cpu_threads; i++) {
             worker_threads.emplace_back(
-                run_cpu_overflow_helper,
+                run_cpu_overflow_worker,
                 i, std::ref(og_config), std::ref(K), std::ref(stats)
             );
         }
 
         while (is_running) {
-            if (stop_queue == 2 and overflow.size == 0) {
-                break;
-            }
-
             // Wait till size is not zero
             overflow.size.wait(0);
 
-            overflow.lock();
-            while (is_running && overflow.size) {
-
-                if (stats.tested % 10'000 == 0 && overflow.size > overflow_too_much) {
-                    printf("\tCPU Sieve Queue: %u open, %lu processed\n",
-                            overflow.size.load(), stats.tested.load());
-                }
-
-                // Maybe move this to the helper?
-                if (stop_queue > 0) {
-                    uint32_t rem = overflow.size + worker_queue.size;
-                    bool is_power_print = false;
-                    for (uint64_t p = 1000; p <= rem; p *= 10) {
-                        is_power_print |= (rem == p) || (rem == 2*p) || (rem == 5*p);
-                    }
-                    if (is_power_print) {
-                        printf("\tFinalizing(stage %d): %u open, %lu processed\n",
-                            stop_queue.load(), rem, stats.tested.load());
-                    }
-                }
-
-                Overflow overflowed = overflow.queue.front(); overflow.queue.pop_front();
-                overflow.unlock();
-
-                if (!USE_GPU_FOR_OVERFLOW ||
-                        (overflowed.type == Overflow::Type::SPOT_CHECK
-                            || overflowed.type == Overflow::Type::PREV_PRIME)) {
-                    // Forward directly to worker_queue.
-                    worker_queue.push_to_queue(overflowed.m, overflowed.d, overflowed.type);
-                    continue;
-                }
-
-                assert( overflowed.type == Overflow::Type::NEXT_PRIME );
-
-                // Do this before testing to prevent multiple CPU Sieve Queue prints on same tested value.
-                // TODO figure out what this means.
-                stats.tested++;
-                auto m = overflowed.m;
-                auto min_x = overflowed.d;
-
-                auto s_start_t = high_resolution_clock::now();
-                push_to_overflow_batch(
-                    overflow_batch,
-                    m, min_x,
-                    K, center, tmp,
-                    composite_tmp, stats);
-
-                if (overflow_batch.added == overflow_batch.N) {
-                    for (size_t i = 0; i < 10; i++) {
-                        auto found = run_overflow_batch(
-                                overflow_batch,
-                                MIN_GAP_TO_CONTINUE,
-                                K, center, tmp, stats);
-                        if (found) break;
-                        printf("GPUBatch didn't find any primes?\n");
-                    }
-                }
-                double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-                stats.d_next_prime_gpu_misc += total_s;
+            if (!is_running) {
+                break;
             }
+            overflow.lock();
+
+            if (stats.tested % 10'000 == 0 && overflow.size > overflow_too_much) {
+                printf("\tCPU Sieve Queue: %u open, %lu processed\n",
+                        overflow.size.load(), stats.tested.load());
+            }
+
+            // Maybe move this to the helper?
+            if (stop_queue > 0) {
+                uint32_t rem = overflow.size + worker_queue.size;
+                bool is_power_print = false;
+                for (uint64_t p = 1000; p <= rem; p *= 10) {
+                    is_power_print |= (rem == p) || (rem == 2*p) || (rem == 5*p);
+                }
+                if (is_power_print) {
+                    printf("\tFinalizing(stage %d): %u(%u + %u) open, %lu processed\n",
+                        stop_queue.load(), rem,
+                        overflow.size.load(), worker_queue.size.load(),
+                        stats.tested.load());
+                }
+            }
+
+            if (overflow.size == 0)
+                continue; // Might have been removed while locking.
+
+            assert( overflow.queue.size() == overflow.size );
+
+            Overflow overflowed = overflow.queue.front(); overflow.queue.pop_front();
+            overflow.size--;
+            overflow.unlock();
+
+            if (overflowed.type == Overflow::Type::STOP_WORKER) {
+                break;
+            }
+
+            if (!USE_GPU_FOR_OVERFLOW ||
+                    (overflowed.type == Overflow::Type::SPOT_CHECK
+                        || overflowed.type == Overflow::Type::PREV_PRIME)) {
+                // Forward directly to worker_queue.
+                worker_queue.push_to_queue(overflowed.m, overflowed.d, overflowed.type);
+                continue;
+            }
+
+            assert( overflowed.type == Overflow::Type::NEXT_PRIME );
+
+            // Do this before testing to prevent multiple CPU Sieve Queue prints on same tested value.
+            // TODO figure out what this means.
+            stats.tested++;
+            auto m = overflowed.m;
+            auto min_x = overflowed.d;
+
+            auto s_start_t = high_resolution_clock::now();
+            push_to_overflow_batch(
+                overflow_batch,
+                m, min_x,
+                K, center, tmp,
+                composite_tmp, stats);
+
+            if (overflow_batch.added == overflow_batch.N) {
+                for (size_t i = 0; i < 10; i++) {
+                    auto found = run_overflow_batch(
+                            overflow_batch,
+                            MIN_GAP_TO_CONTINUE,
+                            K, center, tmp, stats);
+                    if (found) break;
+                    printf("GPUBatch didn't find any primes?\n");
+                }
+            }
+            double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+            stats.d_next_prime_gpu_misc += total_s;
         }
 
         if (is_running) {
@@ -676,9 +690,9 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
 
             if (overflow_batch.added) {
                 // Clear out any remaining items queued in GPUBatch
-                if (og_config.verbose >= 1) {
+                //if (og_config.verbose >= 1) {
                     printf("\tCPU OVERFLOW Finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
-                }
+                //}
 
                 // Slightly akward to run partial batches so handle on CPU.
                 GPUBatch &gpu_batch = overflow_batch.gpu_batch;
@@ -695,9 +709,16 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     worker_queue.size.notify_all();
                 }
             }
+            worker_queue.size.wait(0);
         }
 
-        worker_queue.size.wait(0);
+        if (og_config.verbose >= 2) {
+            printf("\tCPU overflow work done!\n");
+        }
+
+        for (uint32_t i = 0; i < worker_threads.size(); i++) {
+            worker_queue.push_to_queue(0, 0, Overflow::Type::STOP_WORKER);
+        }
 
         for (auto &worker : worker_threads) {
             worker.join();

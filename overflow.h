@@ -36,8 +36,10 @@ struct Overflow {
     uint32_t d;
 
     enum class Type : uint8_t {
-        NEXT_PRIME, PREV_PRIME, SPOT_CHECK,
+        NEXT_PRIME, PREV_PRIME, SPOT_CHECK, STOP_WORKER
     } type;
+
+    Overflow(uint64_t m, uint32_t d, Type type) : m(m), d(d), type(type) {}
 };
 
 class OverflowQueue {
@@ -72,7 +74,7 @@ class OverflowQueue {
                 size.wait(0);
                 lock();
                 if (size > 0) {
-                    // TODO not sure how to do this better
+                    assert( queue.size() == size.load() );
                     Overflow e = queue.front();
                     queue.pop_front();
                     size--;

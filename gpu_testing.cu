@@ -31,6 +31,7 @@
 
 #include "gap_common.h"
 #include "gap_stats.h"
+#include "overflow.h"
 
 #define GPU_TESTING
 
@@ -123,11 +124,12 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
         }
     }
 
-    //if (found > 0 && (rand() & 255) == 0) {
+    if (found > 0 && (rand() & 255) == 0) {
         // Spot check
-        //std::lock_guard lock(overflow_mtx);
-        //spot_check.emplace_back(test_data.m_start + m_i, batch.x);
-    //}
+        //overflow.push_to_queue(
+        //        test_data.m_start + m_i, batch.x,
+        //        Overflow::Type::SPOT_CHECK);
+    }
 
     test_data.unlock();
     return found;
@@ -222,8 +224,9 @@ void run_gpu_thread(int runner_num, int verbose,
                     const mpz_t &K_in) {
     try {
         {
-            std::string name = "GPU(" + std::to_string(runner_num) + ")";
+            std::string name = std::format("GPU({})", runner_num);
             pthread_setname_np(pthread_self(), name.c_str());
+            std::ignore = nice(-1);
         }
 
         mpz_t K, t;

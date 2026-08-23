@@ -70,15 +70,9 @@ These likely are set good enough
     * [ ] Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
     * AVX?
     * Why was a Ryzen 3900x 3x faster at sieving?
-  * [ ] Offload some of overflow back to the GPU
-    * Sieve near each M, have a list of next 20 X offsets
-    * Reuse `runner.run_test` and `sieve_interval_cpu`
-    * Seems like only a 1-5% overhead on number of primes
-      * Can increase "cpu"-fraction (and hence max-prime)
-    * Instead of sieving 500 m for 1 active m, sieve 5x more numbers than needed
-      * Converts a lot of L3 access to L1/L2 access.
-
-  * [ ] Investigate GAP MISMATCH reporting, I think some of the variables are being reused
+  * Tune "cpu"-fraction (and hence max-prime)
+  * Speed up `sieve_interval_cpu`
+  * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
   * [ ] Why does X=12 have twice as many unknowns at X=482?
 
 
@@ -91,3 +85,6 @@ These likely are set good enough
   * [x] Try changing vector<uint8_t> to vector<uint32_t>
     * This didn't seem to have any impact on speed, but I was told it might help in
       reduce mixed cache line access (8 vs 32 vs 64) control so I'll keep it.
+  * [X] Offload overflow `probab_prime` back to the GPU
+    * Sieve each m range, keep batch of these sieves
+    * Make a `GPUBatch` of sieves and current index into `coprime_X`

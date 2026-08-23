@@ -770,13 +770,6 @@ void run_sieve_thread(void) {
     }
 }
 
-static
-void signal_stop_to_everyone() {
-    is_running = false;
-    sieve_data->sieves_ready = OPEN_SIEVES / 2;
-    sieve_data->sieves_ready.notify_all();
-}
-
 
 /** sieve_mtx must be held while calling */
 void SieveData::push_to_overflow_and_increment_M_range() {
@@ -801,6 +794,8 @@ void SieveData::push_to_overflow_and_increment_M_range() {
         // TODO only hold lock once
         overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);
     }
+    // Safe because I hold overflow.lock()
+    overflow.size = overflow.size + active_m_i.size();
     overflow.unlock();
     overflow.size.notify_one();
 
@@ -813,7 +808,7 @@ void SieveData::push_to_overflow_and_increment_M_range() {
 static
 void run_testing_thread(const struct Config og_config) {
     try {
-        pthread_setname_np(pthread_self(), "CREATE_BATCHES");
+        pthread_setname_np(pthread_self(), "TESTING_THREAD");
         std::ignore = nice(-2); // Increase priority a bit
         cout << endl;
 
@@ -919,6 +914,8 @@ void run_testing_thread(const struct Config og_config) {
             assert( state == TestData::ACTIVE || state == TestData::DONE );
             if (state == TestData::ACTIVE ) {
                 test_data.wait_for_state_and_lock(TestData::DONE);
+            } else {
+                test_data.lock();
             }
 
             if (!is_running) {
@@ -926,7 +923,8 @@ void run_testing_thread(const struct Config og_config) {
                 break;
             }
 
-            { // Done
+            {
+                // Holding test_data.lock()
                 assert( test_data.state == TestData::DONE );
                 assert( test_data.running_batches == 0 );
                 assert( test_data.test_i == test_data.unknown_m_i.size() );
@@ -985,13 +983,16 @@ void run_testing_thread(const struct Config og_config) {
             }
         }
 
+        // Push note to overflow that we're done.
+        overflow.push_to_queue(0, 0, Overflow::Type::STOP_WORKER);
+
         if (og_config.verbose >= 1) {
             test_data.lock();
             test_data.print_stats();
             test_data.unlock();
         }
 
-        if (og_config.verbose >= 3)
+        if (og_config.verbose >= 2)
             printf("End of testing thread, Joining batch threads\n");
         // Send notifies (to wake up GPU thread and stop conditional waiting)
         for (auto& gpu_batch : gpu_batches) {
@@ -1026,7 +1027,6 @@ void signal_callback_handler(int) {
        cout << endl;
        cout << "Caught 2nd CTRL+C, is_running = false" << endl;
        is_running = false;
-       signal_stop_to_everyone();
     } else {
        cout << endl;
        cout << "Caught 3nd CTRL+C, exit(2) now." << endl;
@@ -1079,39 +1079,32 @@ void prime_gap_test(struct Config config) {
     std::thread sieve_thread(run_sieve_thread);
 
     setup_overflow(config);
-    std::thread overflow_coordinator_thread{run_overflow_coordinator_thread, std::ref(config)};
+    std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
 
-    while (is_running && stop_queue == 0) {
+    while (is_running && stop_queue <= 2) {
         usleep(50'000); // 50ms
     }
 
     if (!is_running) {
-        signal_stop_to_everyone();
-        uint32_t old_size = overflow.size;
-        // How to make sure overflow thread wakes up from wait?
-        overflow.size = 1;
-        overflow.size.notify_all();
-        overflow.size = 0;
-        overflow.size.notify_all();
-        overflow.size = old_size;
+        sieve_data->sieves_ready = OPEN_SIEVES / 2;
+        sieve_data->sieves_ready.notify_all();
     }
 
-    if (config.verbose >= 3)
-        cout << "Joining threads" << endl;
-
-    // Tell other threads to quit
     {
+        if (config.verbose >= 2)
+            cout << "Joining threads" << endl;
+
         sieve_thread.join();
-        if (config.verbose >= 3)
+        if (config.verbose >= 2)
             cout << "\tsieve joined" << endl;
+
         testing_thread.join();
-        if (config.verbose >= 3)
+        if (config.verbose >= 2)
             cout << "\ttesting joined" << endl;
 
-        // TODO maybe more is needed here?
-        overflow.size.notify_all();  // wake up all overflow thread
-        overflow_coordinator_thread.join();
-        cout << "\toverflow joined" << endl;
+        overflow_thread.join();
+        if (config.verbose >= 2)
+            cout << "\toverflow joined" << endl;
     }
 
     mpz_clear(K);
