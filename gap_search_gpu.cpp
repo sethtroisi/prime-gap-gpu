@@ -886,10 +886,13 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.unlock();
 
                 if (set) {
+                    // test_data isn't locked so do this write first before waking up batches.
                     assert( had_ready > 0 );
+                    assert( test_data.active_batches == 0 );
+                    test_data.active_batches = GPU_BATCHES;
+
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
-                        test_data.active_batches += 1;
                         assert( batch.state == GPUBatch::WAITING );
                         batch.state = GPUBatch::EMPTY;
                         batch.state.notify_one();
