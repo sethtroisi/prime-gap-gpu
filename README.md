@@ -74,7 +74,7 @@ These likely are set good enough
   * [ ] Speed up `sieve_interval_cpu`
   * [ ] Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
   * [ ] Why does X=12 have twice as many unknowns at X=482?
-  * [ ] Gap Mismatch statement - "GAP MISMATCH! 8798 vs 424390035 at 815189846729 * 337# / 2310 + 8630"
+  * [ ] Choose a consistent X to overflow at.
 
 
 ## TODONE

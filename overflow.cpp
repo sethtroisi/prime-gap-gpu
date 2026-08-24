@@ -211,7 +211,10 @@ static
 void sieve_interval_cpu(const uint64_t m,
         const uint32_t sieve_start,
         const uint32_t sieve_length,
-        vector<uint8_t> &composite) {
+        vector<uint8_t> &composite,
+        TestingStats &stats) {
+
+    auto s_start_t = high_resolution_clock::now();
 
     uint16_t bytes = (sieve_length + 7) / 8 + 1;
     composite.resize(bytes, 0);
@@ -244,6 +247,9 @@ void sieve_interval_cpu(const uint64_t m,
             composite[center_mod >> 3] |= 1 << (center_mod & 7);
         }
     }
+
+    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.d_next_prime_sieve += total_s;
 }
 
 static
@@ -252,7 +258,6 @@ uint32_t next_prime_distance(
         const mpz_t &K, mpz_t &center, mpz_t &tmp,
         vector<uint8_t> &composite_tmp,
         TestingStats &stats) {
-    auto s_start_t = high_resolution_clock::now();
 
     mpz_mul_ui(center, K, m);
     mpz_add_ui(tmp, center, min_x);
@@ -268,12 +273,8 @@ uint32_t next_prime_distance(
 
         sieve_interval_cpu(
             m, next_possible_x, coprime_X.back() - next_possible_x + 1,
-            composite_tmp);
+            composite_tmp, stats);
 
-        double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-        stats.d_next_prime_sieve += total_s;
-
-        s_start_t = high_resolution_clock::now();
         const uint32_t N = coprime_X.size();
         for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
             uint16_t x = coprime_X[x_i];
@@ -333,16 +334,11 @@ class OverflowBatch {
 static
 void push_to_overflow_batch(
         OverflowBatch &overflow_batch,
-        const uint64_t m, const uint64_t min_x,
-        const mpz_t &K, mpz_t &center, mpz_t &tmp,
+        const uint64_t m, const uint32_t min_x_i, const uint32_t sieve_start,
+        const mpz_t &K, mpz_t &center,
         vector<uint8_t> &composite_tmp,
         TestingStats &stats) {
-
     auto s_start_t = high_resolution_clock::now();
-
-    uint32_t min_x_i = next_coprime_index[min_x];
-    uint32_t sieve_start = coprime_X[min_x_i];
-    assert( min_x <= sieve_start);
 
     GPUBatch &gpu_batch = overflow_batch.gpu_batch;
 
@@ -353,23 +349,20 @@ void push_to_overflow_batch(
         }
     }
 
+    mpz_mul_ui(center, K, m);
+
     overflow_batch.i = i+1;
     overflow_batch.added++;
     assert(i < overflow_batch.N);
     assert(gpu_batch.active[i] == 0);
-
-    // TODO move this out of this function
-    sieve_interval_cpu(
-        m, sieve_start, coprime_X.back() - sieve_start + 1,
-        overflow_batch.composite_tmp[i]);
+    overflow_batch.gpu_batch.active[i] = true;
+    mpz_add_ui(*overflow_batch.gpu_batch.z[i], center, sieve_start);
 
     overflow_batch.data[i] = std::make_tuple(m, min_x_i, sieve_start);
-    mpz_mul_ui(center, K, m);
-    mpz_add_ui(*overflow_batch.gpu_batch.z[i], center, sieve_start);
-    overflow_batch.gpu_batch.active[i] = true;
+    overflow_batch.composite_tmp[i].swap(composite_tmp);
 
     double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-    stats.d_next_prime_sieve += total_s;
+    stats.d_next_prime_gpu_misc += total_s;
 }
 
 static
@@ -394,6 +387,8 @@ uint32_t run_overflow_batch(
     one_shot_batch( gpu_batch );
     stats.d_next_prime_gpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
+    // Process results.
+    s_start_t = high_resolution_clock::now();
     uint32_t found_primes = 0;
     for (uint32_t i = 0; i < overflow_batch.N; i++) {
         if (!gpu_batch.active[i])
@@ -422,7 +417,9 @@ uint32_t run_overflow_batch(
             }
 
             // TODO Push to some temp queue then unlock only once.
-            if (next_gap > MIN_GAP_TO_CONTINUE) {
+            if (next_gap < MIN_GAP_TO_CONTINUE) {
+                stats.skipped_prev++;
+            } else {
                 worker_queue.push_to_queue(m, next_gap, Overflow::Type::PREV_PRIME);
             }
 
@@ -447,6 +444,7 @@ uint32_t run_overflow_batch(
             }
         }
     }
+    stats.d_next_prime_gpu_misc += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
     if (found_primes)
         worker_queue.size.notify_all();
@@ -673,28 +671,32 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             auto m = overflowed.m;
             auto min_x = overflowed.d;
 
-            auto s_start_t = high_resolution_clock::now();
+            { // Sieve and push that to overflow batch
+                uint32_t min_x_i = next_coprime_index[min_x];
+                uint32_t sieve_start = coprime_X[min_x_i];
+                assert( min_x <= sieve_start);
 
-            // TODO do sieve out here to avoid time adding to gpu_misc
+                sieve_interval_cpu(
+                    m, sieve_start, coprime_X.back() - sieve_start + 1,
+                    composite_tmp, stats);
 
-            push_to_overflow_batch(
-                overflow_batch,
-                m, min_x,
-                K, center, tmp,
-                composite_tmp, stats);
+                push_to_overflow_batch(
+                    overflow_batch,
+                    m, min_x_i, sieve_start,
+                    K, center,
+                    composite_tmp, stats);
 
-            if (overflow_batch.added == overflow_batch.N) {
-                for (size_t i = 0; i < 10; i++) {
-                    auto found = run_overflow_batch(
-                            overflow_batch,
-                            MIN_GAP_TO_CONTINUE,
-                            K, center, tmp, stats);
-                    if (found) break;
-                    printf("GPUBatch didn't find any primes?\n");
+                if (overflow_batch.added == overflow_batch.N) {
+                    for (size_t i = 0; i < 10; i++) {
+                        auto found = run_overflow_batch(
+                                overflow_batch,
+                                MIN_GAP_TO_CONTINUE,
+                                K, center, tmp, stats);
+                        if (found) break;
+                        printf("GPUBatch didn't find any primes?\n");
+                    }
                 }
             }
-            double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-            stats.d_next_prime_gpu_misc += total_s;
         }
 
         if (is_running) {
