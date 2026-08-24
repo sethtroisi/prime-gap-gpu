@@ -100,7 +100,4 @@ class OverflowQueue {
  */
 extern OverflowQueue overflow;
 
-// Must be called before run_cpu_overflow_thread
-void setup_overflow(const struct Config config);
-
 void run_overflow_coordinator_thread(const struct Config og_config);

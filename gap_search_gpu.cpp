@@ -1084,7 +1084,6 @@ void prime_gap_test(struct Config config) {
     }
     std::thread sieve_thread(run_sieve_thread);
 
-    setup_overflow(config);
     std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
 
     while (is_running && stop_queue <= 1) {

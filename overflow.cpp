@@ -48,22 +48,51 @@ using namespace std::chrono;
 
 OverflowQueue overflow;
 
-/** Globals for this class */
-
-vector<uint16_t> coprime_X;
-// coprime_X[coprime_lookup[t]] >= t
-vector<uint16_t> next_coprime_index;
-vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
-vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
-
-std::mutex record_mtx;
-
 /** Tuning Parameters */
 
 const uint32_t OVERFLOW_SIEVE_LIMIT = 200'000;
 
+/** Globals for this class */
+
+std::mutex record_mtx;
+
+class OverflowMisc {
+    public:
+        OverflowMisc(
+                vector<uint16_t> cX,
+                vector<uint16_t> nci,
+                vector<std::pair<uint32_t, uint32_t>> panrs,
+                vector<std::pair<uint32_t, uint32_t>> panr,
+                uint64_t d,
+                uint64_t kmd,
+                vector<uint8_t> dw) :
+            coprime_X(cX), next_coprime_index(nci),
+            p_and_neg_r_small(panrs), p_and_neg_r(panr),
+            D(d), K_mod_d(kmd), d_wheel(dw) {};
+
+        OverflowMisc() {};
+
+        vector<uint16_t> coprime_X;
+        // coprime_X[coprime_lookup[t]] >= t
+        vector<uint16_t> next_coprime_index;
+        vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
+        vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
+
+        uint64_t D;
+        uint64_t K_mod_d; // Should be const after setup
+        vector<uint8_t> d_wheel;
+} ofs;
+
 
 void setup_overflow(const struct Config config) {
+    vector<uint16_t> coprime_X;
+    vector<uint16_t> next_coprime_index;
+    vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
+    vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
+
+    mpz_t K;
+    init_K(config, K);
+
     // TODO TUNE THIS
     // 15 * p, overflows less than .1% of the time.
     uint32_t stop_x = 25 * config.p;
@@ -86,11 +115,19 @@ void setup_overflow(const struct Config config) {
         }
     }
 
+    uint64_t D = config.d;
+    uint64_t K_mod_d = mpz_fdiv_ui(K, D);
 
-    // TODO d wheel to speed up sieve_interval_cpu.
+    // TODO
+    vector<uint8_t> d_wheel;
+    // assert(D < 30000); // Not as useful otherwise
+    // d_wheel.resize(D / 8 + 1);
+    // std::fill(d_wheel.begin(), d_wheel.end(), 0);
+    // for (uint32_t i = 1; i < D; i++) {
+    //     if (gcd(i, d) != 1)
+    //        d_wheel[i >> 3] |= 1 << (i & 7);
+    // }
 
-    mpz_t K;
-    init_K(config, K);
     {
         primesieve::iterator iter;
         uint64_t prime = iter.next_prime();
@@ -109,6 +146,13 @@ void setup_overflow(const struct Config config) {
             }
         }
     }
+
+    ofs = OverflowMisc{
+        coprime_X, next_coprime_index,
+        p_and_neg_r_small, p_and_neg_r,
+        D, K_mod_d, d_wheel};
+
+    mpz_clear(K);
 }
 
 
@@ -218,12 +262,12 @@ void sieve_interval_cpu(const uint64_t m,
 
     // only interested in even i
     assert(sieve_start % 2 == 0);
-    assert(m > p_and_neg_r.back().first);
+    assert(m > ofs.p_and_neg_r.back().first);
 
     // Otherwise I need to do something different here
-    assert(std::log2(m) + std::log2(p_and_neg_r.back().first) < 60);
+    assert(std::log2(m) + std::log2(ofs.p_and_neg_r.back().first) < 60);
 
-    for (const auto& [p, neg_r] : p_and_neg_r_small) {
+    for (const auto& [p, neg_r] : ofs.p_and_neg_r_small) {
         // -(m * K + sieve_start) % r
         uint64_t temp = m * neg_r - sieve_start;
         uint64_t center_mod = temp % ((uint64_t) p);
@@ -235,7 +279,7 @@ void sieve_interval_cpu(const uint64_t m,
         }
     }
 
-    for (const auto& [p, neg_r] : p_and_neg_r) {
+    for (const auto& [p, neg_r] : ofs.p_and_neg_r) {
         // -(m * K + sieve_start) % r
         uint64_t temp = m * neg_r - sieve_start;
         uint64_t center_mod = temp % ((uint64_t) p);
@@ -258,22 +302,22 @@ uint32_t next_prime_distance(
     mpz_mul_ui(center, K, m);
     mpz_add_ui(tmp, center, min_x);
 
-    if (min_x + 500 < coprime_X.back()) {
-        uint32_t min_x_i = next_coprime_index[min_x];
-        uint32_t next_possible_x = coprime_X[min_x_i];
+    if (min_x + 500 < ofs.coprime_X.back()) {
+        uint32_t min_x_i = ofs.next_coprime_index[min_x];
+        uint32_t next_possible_x = ofs.coprime_X[min_x_i];
 
-        assert( 1 <= min_x_i && min_x_i < coprime_X.size() );
+        assert( 1 <= min_x_i && min_x_i < ofs.coprime_X.size() );
         assert( min_x <= next_possible_x );
-        assert( coprime_X[min_x_i-1] < min_x );
+        assert( ofs.coprime_X[min_x_i-1] < min_x );
 
 
         sieve_interval_cpu(
-            m, next_possible_x, coprime_X.back() - next_possible_x + 1,
+            m, next_possible_x, ofs.coprime_X.back() - next_possible_x + 1,
             composite_tmp, stats);
 
-        const uint32_t N = coprime_X.size();
+        const uint32_t N = ofs.coprime_X.size();
         for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
-            uint16_t x = coprime_X[x_i];
+            uint16_t x = ofs.coprime_X[x_i];
             uint16_t j = x - next_possible_x;
             if ((composite_tmp[j >> 3] & (1 << (j & 7))) == 0) {
                 mpz_add_ui(tmp, center, x);
@@ -282,7 +326,7 @@ uint32_t next_prime_distance(
                 }
             }
         }
-        mpz_add_ui(tmp, center, coprime_X.back());
+        mpz_add_ui(tmp, center, ofs.coprime_X.back());
     }
 
     // Fallback to mpz_nextprime if very large
@@ -401,7 +445,7 @@ uint32_t run_overflow_batch(
             stats.tested_gpu++;
 
             mpz_mul_ui(center, K, m);
-            uint32_t next_gap = coprime_X[x_i];
+            uint32_t next_gap = ofs.coprime_X[x_i];
             if (0) {
                 // Debug these results
                 mpz_nextprime(tmp, center);
@@ -422,11 +466,11 @@ uint32_t run_overflow_batch(
 
         } else {
             // Advance to next test see `next_prime_distance`
-            uint32_t last_x = coprime_X[x_i];
-            uint32_t M = coprime_X.size();
+            uint32_t last_x = ofs.coprime_X[x_i];
+            uint32_t M = ofs.coprime_X.size();
             x_i++;
             for (; x_i < M; x_i++) {
-                uint16_t x = coprime_X[x_i];
+                uint16_t x = ofs.coprime_X[x_i];
                 uint16_t j = x - sieve_start;
                 if ((overflow_batch.composite_tmp[i][j >> 3] & (1 << (j & 7))) == 0) {
                     mpz_add_ui(*gpu_batch.z[i], *gpu_batch.z[i], x - last_x);
@@ -437,7 +481,7 @@ uint32_t run_overflow_batch(
                 overflow_batch.remove_entry(i);
                 found_primes++; // TODO Kinda a lie, different name
 
-                worker_queue.push_to_queue(m, coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
+                worker_queue.push_to_queue(m, ofs.coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
             }
         }
     }
@@ -585,6 +629,8 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                                     // Helpers run at much lower
         }
 
+        setup_overflow(og_config);
+
         TestingStats stats;
         OverflowBatch overflow_batch;
 
@@ -672,12 +718,12 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             auto min_x = overflowed.d;
 
             { // Sieve and push that to overflow batch
-                uint32_t min_x_i = next_coprime_index[min_x];
-                uint32_t sieve_start = coprime_X[min_x_i];
+                uint32_t min_x_i = ofs.next_coprime_index[min_x];
+                uint32_t sieve_start = ofs.coprime_X[min_x_i];
                 assert( min_x <= sieve_start);
 
                 sieve_interval_cpu(
-                    m, sieve_start, coprime_X.back() - sieve_start + 1,
+                    m, sieve_start, ofs.coprime_X.back() - sieve_start + 1,
                     composite_tmp, stats);
 
                 push_to_overflow_batch(
@@ -717,7 +763,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
 
                     { // Push each row of GPUBatch to worker_queue.
                         auto& [m, x_i, sieve_start] = overflow_batch.data[i];
-                        uint32_t next_x = coprime_X[x_i];
+                        uint32_t next_x = ofs.coprime_X[x_i];
                         worker_queue.push_to_queue(m, next_x, Overflow::Type::NEXT_PRIME);
                     }
                     overflow_batch.remove_entry(i);
