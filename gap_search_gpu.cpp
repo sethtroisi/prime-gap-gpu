@@ -890,7 +890,6 @@ void run_testing_thread(const struct Config og_config) {
                     assert( had_ready > 0 );
                     assert( test_data.active_batches == 0 );
                     test_data.active_batches = GPU_BATCHES;
-
                     // Mark gpu batches as active
                     for (auto& batch : gpu_batches) {
                         assert( batch.state == GPUBatch::WAITING );

@@ -65,7 +65,7 @@ class OverflowMisc {
                 vector<std::pair<uint32_t, uint32_t>> panr,
                 uint64_t d,
                 uint64_t kmd,
-                vector<uint8_t> dw) :
+                vector<uint16_t> dw) :
             coprime_X(cX), next_coprime_index(nci),
             p_and_neg_r_small(panrs), p_and_neg_r(panr),
             D(d), K_mod_d(kmd), d_wheel(dw) {};
@@ -80,7 +80,7 @@ class OverflowMisc {
 
         uint64_t D;
         uint64_t K_mod_d; // Should be const after setup
-        vector<uint8_t> d_wheel;
+        vector<uint16_t> d_wheel;
 } ofs;
 
 
@@ -118,22 +118,20 @@ void setup_overflow(const struct Config config) {
     uint64_t D = config.d;
     uint64_t K_mod_d = mpz_fdiv_ui(K, D);
 
-    // TODO
-    vector<uint8_t> d_wheel;
-    // assert(D < 30000); // Not as useful otherwise
-    // d_wheel.resize(D / 8 + 1);
-    // std::fill(d_wheel.begin(), d_wheel.end(), 0);
-    // for (uint32_t i = 1; i < D; i++) {
-    //     if (gcd(i, d) != 1)
-    //        d_wheel[i >> 3] |= 1 << (i & 7);
-    // }
+    vector<uint16_t> d_wheel;
+    assert(D < 65000); // Not as useful otherwise
+    for (uint32_t i = 1; i < D; i++) {
+        if (gcd(i, D) != 1)
+            d_wheel.push_back(i);
+    }
 
     {
         primesieve::iterator iter;
         uint64_t prime = iter.next_prime();
         assert (prime == 2);  // we skip 2 which is the oddest prime.
         for (prime = iter.next_prime(); prime < OVERFLOW_SIEVE_LIMIT; prime = iter.next_prime()) {
-            if (prime <= config.p && (config.d % prime != 0))
+            // factors of D handled by d_wheel
+            if (prime <= config.p)
                 continue;
 
             const uint32_t base_r = mpz_fdiv_ui(K, prime);
@@ -256,6 +254,7 @@ void sieve_interval_cpu(const uint64_t m,
 
     auto s_start_t = high_resolution_clock::now();
 
+    // TODO stop storing evens.
     uint16_t bytes = (sieve_length + 7) / 8 + 1;
     composite.resize(bytes, 0);
     std::fill(composite.begin(), composite.end(), 0);
@@ -266,6 +265,27 @@ void sieve_interval_cpu(const uint64_t m,
 
     // Otherwise I need to do something different here
     assert(std::log2(m) + std::log2(ofs.p_and_neg_r.back().first) < 60);
+
+    { // Tile d_wheel into composite with a possible offset
+        uint64_t wheel_start = (m * ofs.K_mod_d + sieve_start) % ofs.D;
+        uint32_t w_n = ofs.d_wheel.size();
+        uint32_t w_i = std::distance(
+                ofs.d_wheel.begin(),
+                std::lower_bound(ofs.d_wheel.begin(), ofs.d_wheel.end(), wheel_start));
+        assert( w_i == w_n || ofs.d_wheel[w_i] >= wheel_start);
+        assert( w_i == 0   || ofs.d_wheel[w_i-1] < wheel_start);
+
+        for (int32_t j = -wheel_start; j < (signed) sieve_length; ) {
+            for ( ; w_i < w_n; w_i++) {
+                uint32_t t = j + ofs.d_wheel[w_i];
+                if (t > sieve_length)
+                    break;
+                composite[t >> 3] |= 1 << (t & 7);
+            }
+            j += ofs.D;
+            w_i = 0;
+        }
+    }
 
     for (const auto& [p, neg_r] : ofs.p_and_neg_r_small) {
         // -(m * K + sieve_start) % r
