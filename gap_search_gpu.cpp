@@ -1015,7 +1015,8 @@ void run_testing_thread(const struct Config og_config) {
                 cout << "\tbatch gpu thread(" << i << ") joined" << endl;
             i++;
         }
-        cout << "\ttesting thread done" << endl;
+        if (og_config.verbose >= 2)
+            cout << "\ttesting thread done" << endl;
     } catch (const std::exception &e) {
         cout << "ERROR in testing_thread" << endl;
         cout << e.what() << endl;

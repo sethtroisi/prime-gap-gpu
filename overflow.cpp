@@ -428,9 +428,12 @@ uint32_t run_overflow_batch(
     one_shot_batch( gpu_batch );
     stats.d_next_prime_gpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
+    // vector of things to later push to worker_queue
+    vector<Overflow> to_push;
+
     // Process results.
     s_start_t = high_resolution_clock::now();
-    uint32_t found_primes = 0;
+    uint32_t finished_items = 0;
     for (uint32_t i = 0; i < overflow_batch.N; i++) {
         if (!gpu_batch.active[i])
             continue;
@@ -441,27 +444,15 @@ uint32_t run_overflow_batch(
         if (gpu_batch.result[i] == 1) {
             // Found nextprime for m!
             overflow_batch.remove_entry(i);
-            found_primes++;
+            finished_items++;
             stats.tested_gpu++;
 
             mpz_mul_ui(center, K, m);
             uint32_t next_gap = ofs.coprime_X[x_i];
-            if (0) {
-                // Debug these results
-                mpz_nextprime(tmp, center);
-                if ( mpz_cmp(tmp, *gpu_batch.z[i]) != 0 ) {
-                    mpz_sub(tmp, tmp, center);
-                    uint32_t t = mpz_get_ui(tmp);
-                    printf("Disagreement on next_prime for m=%lu | %u vs %u\n",
-                            m, next_gap, t);
-                }
-            }
-
-            // TODO Push to some temp queue then unlock only once.
             if (next_gap < MIN_GAP_TO_CONTINUE) {
                 stats.skipped_prev++;
             } else {
-                worker_queue.push_to_queue(m, next_gap, Overflow::Type::PREV_PRIME);
+                to_push.emplace_back(m, next_gap, Overflow::Type::PREV_PRIME);
             }
 
         } else {
@@ -479,19 +470,26 @@ uint32_t run_overflow_batch(
             }
             if (x_i >= M) {
                 overflow_batch.remove_entry(i);
-                found_primes++; // TODO Kinda a lie, different name
-
-                worker_queue.push_to_queue(m, ofs.coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
+                finished_items++;
+                to_push.emplace_back(m, ofs.coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
             }
         }
     }
     stats.d_next_prime_gpu_misc += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
-    if (found_primes)
+    // Push all worker items in one batch.
+    if (to_push.size()) {
+        worker_queue.lock();
+        for (auto& o : to_push) {
+            worker_queue.queue.push_back(o);
+        }
+        worker_queue.size += to_push.size();
+        worker_queue.unlock();
         worker_queue.size.notify_all();
+    }
 
     //printf("\tRan overflow on GPU found: %lu primes\n", overflow_batch.N - overflow_batch.added);
-    return found_primes;
+    return finished_items;
 }
 
 
