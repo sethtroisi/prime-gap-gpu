@@ -58,10 +58,6 @@ vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
 std::mutex record_mtx;
 
-/** Queue of simple work. */
-// TODO own in primary pass to worker
-OverflowQueue worker_queue;
-
 /** Tuning Parameters */
 
 const uint32_t OVERFLOW_SIEVE_LIMIT = 200'000;
@@ -368,6 +364,7 @@ void push_to_overflow_batch(
 static
 uint32_t run_overflow_batch(
         OverflowBatch &overflow_batch,
+        OverflowQueue &worker_queue,
         const float MIN_GAP_TO_CONTINUE,
         const mpz_t &K, mpz_t &center,
         mpz_t &tmp,
@@ -494,6 +491,7 @@ void run_tests_on_cpu(
 
 
 void run_cpu_overflow_worker(const int thread_index,
+                             OverflowQueue &worker_queue,
                              const struct Config og_config,
                              const mpz_t &K_in, TestingStats &stats) {
     {
@@ -606,11 +604,13 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
         // 2-5x what comes in per batch
         const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
+        OverflowQueue worker_queue;
+
         std::vector<std::thread> worker_threads;
         for (int i = 0; i < og_config.cpu_threads; i++) {
             worker_threads.emplace_back(
                 run_cpu_overflow_worker,
-                i, std::ref(og_config), std::ref(K), std::ref(stats)
+                i, std::ref(worker_queue), std::ref(og_config), std::ref(K), std::ref(stats)
             );
         }
 
@@ -690,6 +690,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     for (size_t i = 0; i < 10; i++) {
                         auto found = run_overflow_batch(
                                 overflow_batch,
+                                worker_queue,
                                 MIN_GAP_TO_CONTINUE,
                                 K, center, tmp, stats);
                         if (found) break;
