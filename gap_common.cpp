@@ -85,84 +85,6 @@ void K_stats(
 
 
 /**
- * Return estimated time (in seconds) to PRP test a composite with no small factor
- */
-double prp_time_estimate_composite(double K_log, int verbose) {
-    // TODO: For large K_log, time smaller PRP then upscale with polynomial
-
-    // Some rough estimates at
-    // https://github.com/sethtroisi/misc-scripts/tree/master/prime-time
-
-    float K_log_2 = K_log * K_log;
-    float t_estimate_poly = -1.1971e-03
-        +  5.1072e-07 * K_log
-        +  9.4362e-10 * K_log_2
-        +  1.8757e-13 * K_log_2 * K_log
-        + -1.9582e-18 * K_log_2 * K_log_2;
-    float t_estimate = std::max(1e-3f, t_estimate_poly);
-
-    // Not needed with GPU code.
-    if (verbose >= 3) {
-        if (t_estimate > 0.3) {
-            printf("Estimated secs/PRP: %.1f\n", t_estimate);
-        } else {
-            // Benchmark in thread
-
-            // Create some non-trivial semi-primes.
-            mpz_t n, p, q;
-            mpz_inits(n, p, q, nullptr);
-
-            size_t bits = K_log * 1.442;
-            assert( bits > 50 );
-
-            mpz_set_ui(n, 1);
-
-            // Multiply "large" static primes (25 bits+) to get number of size N
-            size_t bit_goal = bits - 24;
-            while (bit_goal > 0) {
-                // Important to not ever choose small p
-                size_t p_size = bit_goal < 50 ? bit_goal : 25;
-                assert(p_size >= 25);
-                mpz_ui_pow_ui(p, 2, p_size);
-                mpz_nextprime(p, p);
-                mpz_mul(n, n, p);
-                bit_goal -= p_size;
-            }
-            mpz_set(p, n);
-
-            // Smaller prime for fast nextprime.
-            // Large enough to avoid being found with trial division.
-            mpz_ui_pow_ui(q, 2, 25);
-            mpz_nextprime(q, q);
-
-            double t = 0;
-            size_t count = 0;
-            // time a reasonable number (or for 5 seconds)
-            for (; count < 15 || t < 5; count++) {
-                mpz_mul(n, p, q);
-                assert( mpz_sizeinbase(n, 2) >= bits );
-
-                auto  s_start_t = high_resolution_clock::now();
-
-                assert( mpz_probab_prime_p(n, 25) == 0 );
-
-                t += duration<double>(high_resolution_clock::now() - s_start_t).count();
-                mpz_nextprime(q, q);
-            }
-
-            printf("Estimating PRP/s: %ld / %.2f = %.1f/s vs polyfit estimate of %.1f/s\n",
-                    count, t, count / t, 1 / t_estimate);
-            t_estimate = t / count;
-
-            mpz_clears(n, p, q, nullptr);
-        }
-    }
-
-    return t_estimate;
-}
-
-
-/**
  * Count of numbers coprime to d less than end; sum( gcd(m, d) == 1 for m in range(n, n+i) )
  * Uses inclusion exclusion on prime factorization of d
  */
@@ -173,6 +95,7 @@ uint64_t _r_count_num_m(uint64_t n, const vector<int> &factors_d, int i) {
 
     return _r_count_num_m(n, factors_d, i-1) - _r_count_num_m(n / factors_d[i], factors_d, i-1);
 }
+
 
 /**
  * Count number of m [ms, ms + mi) coprime to d

@@ -70,10 +70,11 @@ These likely are set good enough
     * [ ] Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
     * AVX?
     * Why was a Ryzen 3900x 3x faster at sieving?
-  * Tune "cpu"-fraction (and hence max-prime)
-  * Speed up `sieve_interval_cpu`
-  * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
+  * [ ] Tune "cpu"-fraction (and hence max-prime)
+  * [ ] Speed up `sieve_interval_cpu`
+  * [ ] Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
   * [ ] Why does X=12 have twice as many unknowns at X=482?
+  * [ ] Gap Mismatch statement - "GAP MISMATCH! 8798 vs 424390035 at 815189846729 * 337# / 2310 + 8630"
 
 
 ## TODONE

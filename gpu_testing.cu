@@ -126,9 +126,9 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
 
     if (found > 0 && (rand() & 255) == 0) {
         // Spot check
-        //overflow.push_to_queue(
-        //        test_data.m_start + m_i, batch.x,
-        //        Overflow::Type::SPOT_CHECK);
+        overflow.push_to_queue(
+                test_data.m_start + m_i, batch.x,
+                Overflow::Type::SPOT_CHECK);
     }
 
     test_data.unlock();

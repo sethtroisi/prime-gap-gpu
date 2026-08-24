@@ -96,6 +96,7 @@ class OverflowQueue {
 
 /**
  * TODO just pass this to run_cpu_overflow_thread
+ * Also needed in gpu_testing.cu
  */
 extern OverflowQueue overflow;
 

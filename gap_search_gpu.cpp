@@ -762,7 +762,6 @@ void run_sieve_thread(void) {
             printf("\n");
             setlocale(LC_NUMERIC, "C");
         }
-
     } catch (const std::exception &e) {
         cout << "ERROR in run_sieve_thread" << endl;
         cout << e.what() << endl;
@@ -946,8 +945,12 @@ void run_testing_thread(const struct Config og_config) {
                     test_data.stats.s_tests += sieve_data->num_valid;
 
                     sieve_data->push_to_overflow_and_increment_M_range();
-                    if (stop_queue)
-                        stop_queue += 1;
+                    if (stop_queue) {
+                        stop_queue++;
+                        if (og_config.verbose >= 2) {
+                            printf("\tChanged stop_queue to %u\n", stop_queue.load());
+                        }
+                    }
 
                     test_data.full_reset();
 
@@ -1000,13 +1003,16 @@ void run_testing_thread(const struct Config og_config) {
             gpu_batch.state = GPUBatch::EMPTY;
             gpu_batch.state.notify_all();
         }
+        if (og_config.verbose >= 2)
+            cout << "\tjoining gpu threads" << endl;
         size_t i = 0;
         for (auto & gpu_thread : gpu_threads) {
             gpu_thread.join();
-            if (og_config.verbose >= 3)
+            if (og_config.verbose >= 2)
                 cout << "\tbatch gpu thread(" << i << ") joined" << endl;
             i++;
         }
+        cout << "\ttesting thread done" << endl;
     } catch (const std::exception &e) {
         cout << "ERROR in testing_thread" << endl;
         cout << e.what() << endl;
@@ -1081,14 +1087,12 @@ void prime_gap_test(struct Config config) {
     setup_overflow(config);
     std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
 
-    while (is_running && stop_queue <= 2) {
+    while (is_running && stop_queue <= 1) {
         usleep(50'000); // 50ms
     }
 
-    if (!is_running) {
-        sieve_data->sieves_ready = OPEN_SIEVES / 2;
-        sieve_data->sieves_ready.notify_all();
-    }
+    sieve_data->sieves_ready = OPEN_SIEVES / 2;
+    sieve_data->sieves_ready.notify_all();
 
     {
         if (config.verbose >= 2)

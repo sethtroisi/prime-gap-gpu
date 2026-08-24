@@ -339,7 +339,7 @@ class test_runner_t {
 
           CUDA_CHECK(cudaStreamCreate(&runner_stream));
 
-          // TODO: only use this if batch takes > 100ms
+          // Useful if batch takes > 100ms
           // Reduces GPU_THREAD cpu from 100% while waiting
           //CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
           CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));

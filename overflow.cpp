@@ -187,9 +187,9 @@ void handle_next_prime_result(
         stats.skipped_prev++;
         return;
     }
+    stats.tested_prev++;
 
     auto s_start_t = high_resolution_clock::now();
-    stats.tested_prev++;
     mpz_prevprime(prev_p, center);
     mpz_sub(prev_p, center, prev_p);
     uint64_t prev_gap = mpz_get_ui(prev_p);
@@ -221,9 +221,13 @@ void sieve_interval_cpu(const uint64_t m,
     assert(sieve_start % 2 == 0);
     assert(m > p_and_neg_r.back().first);
 
+    // Otherwise I need to do something different here
+    assert(std::log2(m) + std::log2(p_and_neg_r.back().first) < 60);
+
     for (const auto& [p, neg_r] : p_and_neg_r_small) {
         // -(m * K + sieve_start) % r
-        uint64_t center_mod = ((uint64_t) m * neg_r - sieve_start) % p;
+        uint64_t temp = m * neg_r - sieve_start;
+        uint64_t center_mod = temp % ((uint64_t) p);
         center_mod += (center_mod & 1) ? p : 0;
 
         uint32_t two_p = p << 1;
@@ -234,7 +238,8 @@ void sieve_interval_cpu(const uint64_t m,
 
     for (const auto& [p, neg_r] : p_and_neg_r) {
         // -(m * K + sieve_start) % r
-        uint64_t center_mod = ((uint64_t) m * neg_r - sieve_start) % p;
+        uint64_t temp = m * neg_r - sieve_start;
+        uint64_t center_mod = temp % ((uint64_t) p);
         if (center_mod < sieve_length && (center_mod & 1) == 0) {
             composite[center_mod >> 3] |= 1 << (center_mod & 7);
         }
@@ -243,39 +248,44 @@ void sieve_interval_cpu(const uint64_t m,
 
 static
 uint32_t next_prime_distance(
-        const uint64_t m, const uint64_t min_x,
+        const uint64_t m, const uint32_t min_x,
         const mpz_t &K, mpz_t &center, mpz_t &tmp,
         vector<uint8_t> &composite_tmp,
         TestingStats &stats) {
     auto s_start_t = high_resolution_clock::now();
 
-    uint32_t min_x_i = next_coprime_index[min_x];
-    uint32_t next_possible_x = coprime_X[min_x_i];
-
-    assert( 1 <= min_x_i && min_x_i < coprime_X.size() );
-    assert( min_x <= next_possible_x );
-    assert( coprime_X[min_x_i-1] < min_x );
-
-    sieve_interval_cpu(
-        m, next_possible_x, coprime_X.back() - next_possible_x + 1,
-        composite_tmp);
-
-    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-    stats.d_next_prime_sieve += total_s;
-
     mpz_mul_ui(center, K, m);
+    mpz_add_ui(tmp, center, min_x);
 
-    s_start_t = high_resolution_clock::now();
-    const uint32_t N = coprime_X.size();
-    for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
-        uint16_t x = coprime_X[x_i];
-        uint16_t j = x - next_possible_x;
-        if ((composite_tmp[j >> 3] & (1 << (j & 7))) == 0) {
-            mpz_add_ui(tmp, center, x);
-            if (mpz_probab_prime_p(tmp, 20)) {
-                return x;
+    if (min_x + 500 < coprime_X.back()) {
+        uint32_t min_x_i = next_coprime_index[min_x];
+        uint32_t next_possible_x = coprime_X[min_x_i];
+
+        assert( 1 <= min_x_i && min_x_i < coprime_X.size() );
+        assert( min_x <= next_possible_x );
+        assert( coprime_X[min_x_i-1] < min_x );
+
+
+        sieve_interval_cpu(
+            m, next_possible_x, coprime_X.back() - next_possible_x + 1,
+            composite_tmp);
+
+        double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+        stats.d_next_prime_sieve += total_s;
+
+        s_start_t = high_resolution_clock::now();
+        const uint32_t N = coprime_X.size();
+        for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
+            uint16_t x = coprime_X[x_i];
+            uint16_t j = x - next_possible_x;
+            if ((composite_tmp[j >> 3] & (1 << (j & 7))) == 0) {
+                mpz_add_ui(tmp, center, x);
+                if (mpz_probab_prime_p(tmp, 20)) {
+                    return x;
+                }
             }
         }
+        mpz_add_ui(tmp, center, coprime_X.back());
     }
 
     // Fallback to mpz_nextprime if very large
@@ -348,6 +358,7 @@ void push_to_overflow_batch(
     assert(i < overflow_batch.N);
     assert(gpu_batch.active[i] == 0);
 
+    // TODO move this out of this function
     sieve_interval_cpu(
         m, sieve_start, coprime_X.back() - sieve_start + 1,
         overflow_batch.composite_tmp[i]);
@@ -432,8 +443,7 @@ uint32_t run_overflow_batch(
                 overflow_batch.remove_entry(i);
                 found_primes++; // TODO Kinda a lie, different name
 
-                // TODO Push to some temp queue then unlock only once.
-                worker_queue.push_to_queue(m, last_x+1, Overflow::Type::NEXT_PRIME);
+                worker_queue.push_to_queue(m, coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
             }
         }
     }
@@ -659,12 +669,14 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             assert( overflowed.type == Overflow::Type::NEXT_PRIME );
 
             // Do this before testing to prevent multiple CPU Sieve Queue prints on same tested value.
-            // TODO figure out what this means.
             stats.tested++;
             auto m = overflowed.m;
             auto min_x = overflowed.d;
 
             auto s_start_t = high_resolution_clock::now();
+
+            // TODO do sieve out here to avoid time adding to gpu_misc
+
             push_to_overflow_batch(
                 overflow_batch,
                 m, min_x,
@@ -690,9 +702,9 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
 
             if (overflow_batch.added) {
                 // Clear out any remaining items queued in GPUBatch
-                //if (og_config.verbose >= 1) {
-                    printf("\tCPU OVERFLOW Finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
-                //}
+                if (og_config.verbose >= 1) {
+                    printf("\tCPU overflow finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
+                }
 
                 // Slightly akward to run partial batches so handle on CPU.
                 GPUBatch &gpu_batch = overflow_batch.gpu_batch;
@@ -731,6 +743,8 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     stats.tested.load(),
                     100.0 * stats.tested_cpu / stats.tested,
                     100.0 * stats.tested_gpu / stats.tested);
+            printf("\t               : \t(%lu CPU, %lu GPU)\n",
+                    stats.tested_cpu.load(), stats.tested_gpu.load());
             printf("\tspot checked   : %lu (%.6f secs/prob_prime test)\n",
                     stats.spot_checked.load(), stats.d_spot_check / (EPS + stats.spot_checked));
             printf("\tnext prime only: %lu, both sides: %lu\n",
