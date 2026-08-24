@@ -55,6 +55,9 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
     * Increasing leads to less sparse sieves across X, trades of for more overflow work
   * `OVERFLOW_SIEVE_LIMIT`: TODO
     * Trades CPU sieving for GPU time, look at `total time     : sieve` from `CPU OVERFLOW Timing`
+  * overflow.cpp: `stop_x`
+    * Increasing leads to less numbers running out of the sieved range (and overflowing to CPU)
+    * Decreasing leads to faster sieving.
   * `max-prime` better to increase at some point top primes never run
   * `minc`: TODO add some metric to tune on.
 
@@ -70,8 +73,6 @@ These likely are set good enough
     * [ ] Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
     * AVX?
     * Why was a Ryzen 3900x 3x faster at sieving?
-  * [ ] Tune "cpu"-fraction (and hence max-prime)
-  * [ ] Speed up `sieve_interval_cpu`
   * [ ] Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
   * [ ] Why does X=12 have twice as many unknowns at X=482?
   * [ ] Choose a consistent X to overflow at.

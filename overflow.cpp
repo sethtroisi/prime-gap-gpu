@@ -93,9 +93,10 @@ void setup_overflow(const struct Config config) {
     mpz_t K;
     init_K(config, K);
 
-    // TODO TUNE THIS
-    // 15 * p, overflows less than .1% of the time.
-    uint32_t stop_x = 25 * config.p;
+    // 10 -> 3% overflow, 21K sieves / second
+    // 11 -> 1% overflow, 20K sieves / second
+    // 15 -> .5% overflow, 18K sieves / second
+    uint32_t stop_x = 11 * config.p;
     {
         auto X = get_coprime_X(config, stop_x);
         coprime_X.reserve(X.size());
