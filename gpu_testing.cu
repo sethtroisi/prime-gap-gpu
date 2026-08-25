@@ -33,7 +33,7 @@
 #include "gap_stats.h"
 #include "overflow.h"
 
-#define GPU_TESTING
+// #define GPU_TESTING
 
 #ifdef GPU_TESTING
 #include "miller_rabin.h"
@@ -41,6 +41,8 @@
 
 using std::vector;
 using namespace std::chrono;
+
+#ifdef GPU_TESTING
 
 #ifdef GPU_BITS
 const int BITS = GPU_BITS;
@@ -51,6 +53,12 @@ const int BITS = 1024;
 const int WINDOW_BITS = (BITS <= 1024) ? 5 : 6;
 const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
 
+// Always use 1.
+// TODO try simplifying miller_rabin and see if it changes speed.
+const int ROUNDS = 1;
+
+#endif // GPU_TESTING
+
 /**
  * GPU_BATCHES the number of simultanious batches to create & queue.
  * GPU_BATCH_SIZE is 2^n | best is between 4K and 16K.
@@ -59,9 +67,6 @@ const size_t GPU_BATCHES = 3;
 const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
-// Always use 1.
-// TODO try simplifying miller_rabin and see if it changes speed.
-const int ROUNDS = 1;
 
 
 /********** BENCHMARKING ***********/
@@ -124,12 +129,14 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
         }
     }
 
+#ifdef GPU_TESTING
     if (found > 0 && (rand() & 255) == 0) {
         // Spot check
         overflow.push_to_queue(
                 test_data.m_start + m_i, batch.x,
                 Overflow::Type::SPOT_CHECK);
     }
+#endif // GPU_TESTING
 
     test_data.unlock();
     return found;
@@ -202,16 +209,28 @@ inline void fill_batch(
  * TODO I want overflow to own runner without needing cuda compilation
  * Is there a forward declaration or point to implementation?
  */
+#ifdef GPU_TESTING
 typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
 test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+#endif // GPU_TESTING
+
 
 void one_shot_batch(GPUBatch& batch) {
-#ifndef GPU_TESTING
-    assert(false);
-#endif // !GPU_TESTING
+#ifdef GPU_TESTING
 
     // run batch on gpu and wait for results to be set
     runner.run_test(batch.i, batch.z, batch.result);
+
+#else
+
+    // Return true for 1/10 results (helps not overflow sieve)
+    for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
+        if (batch.active[gpu_i]) {
+            batch.result[gpu_i] = (std::rand() % 10) == 1;
+        }
+    }
+
+#endif // GPU_TESTING
 }
 
 /**
@@ -404,5 +423,9 @@ void gpu_state_and_checks(const mpz_t &K_in, const uint64_t m_end) {
         exit(1);
     }
     assert( BITS <= (1 << (2 * WINDOW_BITS)) );
+#else
+
+    printf("FAKE PRIME TESTING\n");
+
 #endif // GPU_TESTING
 }

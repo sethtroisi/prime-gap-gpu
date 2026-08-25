@@ -66,6 +66,7 @@ class OverflowQueue {
             queue.emplace_back(m, d, type);
             size++;
             unlock();
+            size.notify_one();
         }
 
         Overflow wait_and_get() {

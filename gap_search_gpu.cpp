@@ -788,15 +788,17 @@ void SieveData::push_to_overflow_and_increment_M_range() {
         printf("\n");
     }
 
-    overflow.lock();
-    for (uint32_t m_i : active_m_i) {
-        // TODO only hold lock once
-        overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);
+    if (0) {
+        overflow.lock();
+        for (uint32_t m_i : active_m_i) {
+            // TODO only hold lock once
+            overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);
+        }
+        // Safe because I hold overflow.lock()
+        overflow.size = overflow.size + active_m_i.size();
+        overflow.unlock();
+        overflow.size.notify_one();
     }
-    // Safe because I hold overflow.lock()
-    overflow.size = overflow.size + active_m_i.size();
-    overflow.unlock();
-    overflow.size.notify_one();
 
     config.m_start += m_inc;
     state = SieveData::NEW;

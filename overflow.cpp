@@ -688,7 +688,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             }
             overflow.lock();
 
-            if (stats.tested % 10'000 == 0 && overflow.size > overflow_too_much) {
+            if (stats.tested % 50'000 == 0 && overflow.size > overflow_too_much) {
                 printf("\tCPU Sieve Queue: %u open, %lu processed\n",
                         overflow.size.load(), stats.tested.load());
             }
@@ -786,10 +786,8 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                         worker_queue.push_to_queue(m, next_x, Overflow::Type::NEXT_PRIME);
                     }
                     overflow_batch.remove_entry(i);
-                    worker_queue.size.notify_all();
                 }
             }
-            worker_queue.size.wait(0);
         }
 
         if (og_config.verbose >= 2) {
@@ -804,8 +802,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             worker.join();
         }
 
-        if (og_config.verbose >= 1) {
-            float EPS = 1.0 * (stats.tested > 0);
+        if (og_config.verbose >= 1 and stats.tested > 0) {
             printf("\nCPU OVERFLOW Timing:\n");
             printf("\ttotal tested   : %lu (%.1f%% CPU, %.1f%% GPU)\n",
                     stats.tested.load(),
@@ -814,7 +811,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             printf("\t               : \t(%lu CPU, %lu GPU)\n",
                     stats.tested_cpu.load(), stats.tested_gpu.load());
             printf("\tspot checked   : %lu (%.6f secs/prob_prime test)\n",
-                    stats.spot_checked.load(), stats.d_spot_check / (EPS + stats.spot_checked));
+                    stats.spot_checked.load(), stats.d_spot_check / stats.spot_checked);
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
             printf("\ttotal time     : sieve: %.1f, cpu: %.1f, gpu %.1f\n",
