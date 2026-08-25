@@ -67,16 +67,40 @@ These likely are set good enough
    * `GPU_BATCHES` 2-3, 3 is probably better.
 
 
+## Upgrades
+
+  * [ ] Speeding up `run_overflow_coordinator_thread` work
+     * `--cpu-fraction` at 2% isn't leading to saturated GPU testing.
+       Increasing to 5% would help but would increase overflow work by 2-3X.
+       Overflow work is probably sieved less agressievly than the main work so this is "less efficient".
+       If the 5% of overflow takes 2x more prp tests, the overallwork is 105% which is great if it helps
+       raise GPU utilization from 80% to 90%.
+     * Wild idea: Have each worker own it's own `OverflowBatch`, sieving is now handled by workers threads.
+
+  * Consider for much later
+    * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.
+      * Pros:
+        * Would free up 5+ CPU cores
+      * Cons:
+        * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
+        * Probably creates more work for coordinator who is already near the limit
+    * Choose a consistent X to overflow at.
+      * Pros:
+        * If known before hand might simplify some of the CPU overflow sieve math & tracking
+        * Can start sieves for next range ahead of time.
+      * Cons:
+        * Less dynamic flexibility
+
 ## TODO
 
+  * [ ] Test removing ROUNDS from miller-rabin
   * [ ] Faster sieving
-    * [ ] Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
-    * AVX?
-    * Why was a Ryzen 3900x 3x faster at sieving?
-  * [ ] Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`
+    * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
+    * AVX512 scatter is maybe faster or not?
+    * Why was my old Ryzen 3900x faster at sieving?
+    * Efficency with current model is 10.6 PRP tests per `m`, at 100M this is 9.9 PRP/m (+7%)
+      * Gain is probably more because initial sieve can be higher too.
   * [ ] Why does X=12 have twice as many unknowns at X=482?
-  * [ ] Choose a consistent X to overflow at.
-
 
 ## TODONE
 
