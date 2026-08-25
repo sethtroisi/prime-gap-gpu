@@ -51,8 +51,12 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
 
 ## TUNING
 
+  * `-p` prime (AKA `log(K)`)
+    * Decreasing means faster PRP and fewer PRP/m so `O(n^2)` if move below a threshold of 512, 768, 1024 bits.
+    * First order effect of decreasing is CPU overflow may bog down more.
   * `--cpu-fraction`
-    * Increasing leads to less sparse sieves across X, trades of for more overflow work
+    * Increasing leads to less sparse sieves across X, trades off for more overflow work
+    * Should lower (more sieving) till `Waiting 4 sieves` becomes 5-10%.
   * `OVERFLOW_SIEVE_LIMIT`: TODO
     * Trades CPU sieving for GPU time, look at `total time     : sieve` from `CPU OVERFLOW Timing`
   * overflow.cpp: `stop_x`
@@ -61,11 +65,10 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
   * `max-prime` better to increase at some point top primes never run
   * `minc`: TODO add some metric to tune on.
 
-These likely are set good enough
+These are likely set to good values
 
    * `OPEN_SIEVES` 3-6 is probably great balance of enough unknown count smoothing while minimizing memory usage.
    * `GPU_BATCHES` 2-3, 3 is probably better.
-
 
 ## Upgrades
 
@@ -75,7 +78,14 @@ These likely are set good enough
        Overflow work is probably sieved less agressievly than the main work so this is "less efficient".
        If the 5% of overflow takes 2x more prp tests, the overallwork is 105% which is great if it helps
        raise GPU utilization from 80% to 90%.
-     * Wild idea: Have each worker own it's own `OverflowBatch`, sieving is now handled by workers threads.
+     * Two ideas
+        1. Have each worker own it's own `OverflowBatch` and not push to a secondary `worker_queue`
+           * Easier to code, Homogenous code
+           * 4096 \* 6 in progress `composite_tmp` -> ~45MB of temp
+        2. Have three types of workers
+           * GPU coordinator, sieve worker, worker queue
+           * This is complicated because 1 pushes to 2 and 2 pushes back to 1, 1 then pushes to 3
+           * Lots of knarly code.
 
   * Consider for much later
     * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.
@@ -83,7 +93,6 @@ These likely are set good enough
         * Would free up 5+ CPU cores
       * Cons:
         * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
-        * Probably creates more work for coordinator who is already near the limit
     * Choose a consistent X to overflow at.
       * Pros:
         * If known before hand might simplify some of the CPU overflow sieve math & tracking
@@ -93,14 +102,15 @@ These likely are set good enough
 
 ## TODO
 
+  * [ ] Print next `m_start` if `stop_queue==2` and not `!is_running`
   * [ ] Test removing ROUNDS from miller-rabin
   * [ ] Faster sieving
+    * [ ] Tune 995'000 constant
     * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
     * AVX512 scatter is maybe faster or not?
     * Why was my old Ryzen 3900x faster at sieving?
     * Efficency with current model is 10.6 PRP tests per `m`, at 100M this is 9.9 PRP/m (+7%)
       * Gain is probably more because initial sieve can be higher too.
-  * [ ] Why does X=12 have twice as many unknowns at X=482?
 
 ## TODONE
 
@@ -114,3 +124,7 @@ These likely are set good enough
   * [X] Offload overflow `probab_prime` back to the GPU
     * Sieve each m range, keep batch of these sieves
     * Make a `GPUBatch` of sieves and current index into `coprime_X`
+  * [ ] Understand why some X=12 have twice as many unknowns?
+    * `m * K % 3` is 1 or 2; and doesn't remove any factors from `X=12`
+    * When `X % 3 == 0` you end up with twice as many factors.
+    * With `X % 3 == {1, 2}` half of factors get removed by 3, (1/4 with 5, 1/6 with 7)
