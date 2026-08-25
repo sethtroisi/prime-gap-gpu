@@ -788,10 +788,13 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     overflow_batch.remove_entry(i);
                 }
             }
+
+            // Would be nice to wait for overflow_batch to have 0 size
+            // Can't really wait on the atomic because it changes X'XXX times
         }
 
         if (og_config.verbose >= 2) {
-            printf("\tCPU overflow work done!\n");
+            printf("\tCPU overflow coordinator work done!\n");
         }
 
         for (uint32_t i = 0; i < worker_threads.size(); i++) {

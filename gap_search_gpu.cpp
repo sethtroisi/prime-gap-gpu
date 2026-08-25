@@ -584,24 +584,58 @@ void run_sieve_thread(void) {
             }
 
             uint64_t prime = 0;
-            for( const auto& [p, neg_inv_K] : p_and_neg_inverse_k_small) {
-                prime = p;
-                // if ((m * K + X) % p == 0) {
-                // if ((m * K) % p == -X) {
-                // if ((m * K * inv_K) % p == -X * inv_K) {
-                //uint64_t m_0 = (-X * inv_K) % prime;
+            if (1) {
+                // Break the larger range up into smaller ranges that are more likely to fit in L2 (2MB cache)
+                uint64_t intervals = M_INC_HALF / 995'000;
+                //printf("Breaking up into %lu intervals of %lu each\n", intervals, m_inc / intervals);
+                for (size_t interval = 0; interval < intervals; interval++) {
+                    // indexed into [0, m_inc]
+                    uint64_t i_start = interval * M_INC_HALF / intervals;
+                    uint64_t i_end   = (interval+1) * M_INC_HALF / intervals;
+                    // to replace m_start
+                    uint64_t m_interval_start = m_start + (i_start << 1);
 
-                uint64_t m_start_shift = m_start % prime;
-                m_start_shift = prime - m_start_shift;
-                uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+                    //printf("%2lu -> [%lu, %lu) = %lu\n", interval, i_start, i_end, interval_half_length);
+                    for( const auto& [p, neg_inv_K] : p_and_neg_inverse_k_small) {
+                        prime = p;
+                        // if ((m * K + X) % p == 0) {
+                        // if ((m * K) % p == -X) {
+                        // if ((m * K * inv_K) % p == -X * inv_K) {
+                        //uint64_t m_0 = (-X * inv_K) % prime;
 
-                // This requires K odd and m_start even (both checked above)
-                // See 1ba32111 for more details.
-                mi_0 += (mi_0 & 1) ? 0 : prime;
-                mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+                        uint64_t i_start_shift = prime - (m_interval_start % prime);
+                        uint64_t mi_0 = (X * neg_inv_K + i_start_shift) % prime;
 
-                for ( uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
-                    composites[t >> 5] |= 1 << (t & 31);
+                        // This requires K odd and m_start even (both checked above)
+                        // See 1ba32111 for more details.
+                        mi_0 += (mi_0 & 1) ? 0 : prime;
+                        mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+
+                        for ( uint32_t t = i_start + mi_0; t < i_end; t += prime) {
+                            composites[t >> 5] |= 1 << (t & 31);
+                        }
+                    }
+                }
+            } else {
+                for( const auto& [p, neg_inv_K] : p_and_neg_inverse_k_small) {
+                    prime = p;
+                    // if ((m * K + X) % p == 0) {
+                    // if ((m * K) % p == -X) {
+                    // if ((m * K * inv_K) % p == -X * inv_K) {
+                    //uint64_t m_0 = (-X * inv_K) % prime;
+
+                    // Just needs to be small, not exact, 2nd mod makes exact
+                    uint64_t m_start_shift = prime - (m_start % prime);
+                    uint64_t mi_0 = (X * neg_inv_K + m_start_shift) % prime;
+
+                    // This requires K odd and m_start even (both checked above)
+                    // See 1ba32111 for more details.
+                    mi_0 += (mi_0 & 1) ? 0 : prime;
+                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
+
+                    for ( uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
+                        composites[t >> 5] |= 1 << (t & 31);
+                    }
                 }
             }
 
@@ -753,8 +787,8 @@ void run_sieve_thread(void) {
             printf("\tavg prime: %'lu\n", total_primes / total_runs);
             printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
-            printf("\ttotal_time: %.1f seconds (%.3f/sieve)\n",
-                    total_time, total_time / total_runs);
+            printf("\ttotal_time: %.1f seconds (%.3f/sieve, %.3f secs/billion)\n",
+                    total_time, total_time / total_runs, total_time / total_runs * 1e9 / m_inc);
             printf("\ttotal_active: %'lu, total_unknown: %'lu (%.2f%%)\n",
                     total_active, total_unknown, 100.0 * total_unknown / total_active);
             printf("\tactive / run: %'lu, unknown / run: %'lu\n",
@@ -788,7 +822,7 @@ void SieveData::push_to_overflow_and_increment_M_range() {
         printf("\n");
     }
 
-    if (0) {
+    if (1) { // Used when benchmarking sieve
         overflow.lock();
         for (uint32_t m_i : active_m_i) {
             // TODO only hold lock once
