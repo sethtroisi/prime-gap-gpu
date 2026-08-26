@@ -57,6 +57,9 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
   * `--cpu-fraction`
     * Increasing leads to less sparse sieves across X, trades off for more overflow work
     * Should lower (more sieving) till `Waiting 4 sieves` becomes 5-10%.
+    * `--cpu-fraction` **doesn't (significantly) change the total number of PRP tests**.
+      It moves PRP tests from main testing thread to overflow thread.
+      This has some change in sieve level (bad) and some decrease in `waiting 4 sieves` (good).
   * `OVERFLOW_SIEVE_LIMIT`: TODO
     * Trades CPU sieving for GPU time, look at `total time     : sieve` from `CPU OVERFLOW Timing`
   * overflow.cpp: `stop_x`
@@ -73,19 +76,11 @@ These are likely set to good values
 ## Upgrades
 
   * [ ] Speeding up `run_overflow_coordinator_thread` work
-     * `--cpu-fraction` at 2% isn't leading to saturated GPU testing.
+     * `--cpu-fraction` at 2% wasn't saturating GPU testing.
        Increasing to 5% would help but would increase overflow work by 2-3X.
        Overflow work is probably sieved less agressievly than the main work so this is "less efficient".
        If the 5% of overflow takes 2x more prp tests, the overallwork is 105% which is great if it helps
        raise GPU utilization from 80% to 90%.
-     * Two ideas
-        1. Have each worker own it's own `OverflowBatch` and not push to a secondary `worker_queue`
-           * Easier to code, Homogenous code
-           * 4096 \* 6 in progress `composite_tmp` -> ~45MB of temp
-        2. Have three types of workers
-           * GPU coordinator, sieve worker, worker queue
-           * This is complicated because 1 pushes to 2 and 2 pushes back to 1, 1 then pushes to 3
-           * Lots of knarly code.
 
   * Consider for much later
     * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.

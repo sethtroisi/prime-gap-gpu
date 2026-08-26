@@ -1025,7 +1025,9 @@ void run_testing_thread(const struct Config og_config) {
         }
 
         // Push note to overflow that we're done.
-        overflow.push_to_queue(0, 0, Overflow::Type::STOP_WORKER);
+        for (int32_t i = 0; i < og_config.cpu_threads; i++) {
+            overflow.push_to_queue(0, 0, Overflow::Type::STOP_WORKER);
+        }
 
         if (og_config.verbose >= 1) {
             test_data.lock();

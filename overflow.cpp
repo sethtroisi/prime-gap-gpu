@@ -51,6 +51,7 @@ OverflowQueue overflow;
 /** Tuning Parameters */
 
 const uint32_t OVERFLOW_SIEVE_LIMIT = 200'000;
+const bool EXTRA_CHECKS = false;
 
 /** Globals for this class */
 
@@ -174,8 +175,8 @@ void process_result(
         mpz_mul_ui(center, K, m);
         mpz_sub_ui(prev_p, center, prev_gap);
         mpz_nextprime(next_p, prev_p);
-        mpz_sub(next_p, next_p, prev_p);
-        uint64_t test_gap = mpz_get_ui(next_p);
+        mpz_sub(tmp, next_p, prev_p);
+        uint64_t test_gap = mpz_get_ui(tmp);
         if (test_gap != gap) {
             // These numbers are marked "prime" by GPU because we only do 1 round.
             mpz_sub_ui(tmp, next_p, 1);
@@ -188,6 +189,7 @@ void process_result(
                         m, P, D, test_gap - prev_gap);
             } else {
                 stats.mismatches++;
+                gmp_printf("%Zd\n", next_p);
                 printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u + %lu\n",
                         test_gap, gap, m, P, D, test_gap - prev_gap);
             }
@@ -227,6 +229,11 @@ void handle_next_prime_result(
         return;
     }
     stats.tested_prev++;
+
+    if (EXTRA_CHECKS) {
+        mpz_mul_ui(tmp2, K, m);
+        assert( mpz_cmp(tmp2, center) == 0);
+    }
 
     auto s_start_t = high_resolution_clock::now();
     mpz_prevprime(prev_p, center);
@@ -331,7 +338,6 @@ uint32_t next_prime_distance(
         assert( min_x <= next_possible_x );
         assert( ofs.coprime_X[min_x_i-1] < min_x );
 
-
         sieve_interval_cpu(
             m, next_possible_x, ofs.coprime_X.back() - next_possible_x + 1,
             composite_tmp, stats);
@@ -354,6 +360,44 @@ uint32_t next_prime_distance(
     mpz_nextprime(tmp, tmp);
     mpz_sub(tmp, tmp, center);
     return mpz_get_ui(tmp);
+}
+
+
+static
+void run_tests_on_cpu(
+        const float MIN_GAP_TO_CONTINUE, const float min_merit,
+        const double K_log, const uint32_t P, const uint32_t D,
+        const uint64_t m, const uint64_t min_x,
+        const mpz_t &K, mpz_t &center,
+        mpz_t &next_p, mpz_t &prev_p,
+        mpz_t &tmp, mpz_t &tmp2,
+        vector<uint8_t> &composite_tmp,
+        TestingStats &stats,
+        std::ofstream &record_stream) {
+
+    auto s_start_t = high_resolution_clock::now();
+    uint64_t next_gap = 0;
+    if (0) {
+        mpz_mul_ui(center, K, m);
+        mpz_add_ui(next_p, center, min_x);
+        mpz_nextprime(next_p, next_p);
+        mpz_sub(next_p, next_p, center);
+        next_gap = mpz_get_ui(next_p);
+    } else {
+        next_gap = next_prime_distance(
+                m, min_x,
+                K, center, tmp,
+                composite_tmp, stats);
+    }
+    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.d_next_prime_cpu += total_s;
+    stats.tested_cpu += 1;
+
+    handle_next_prime_result(
+        MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
+        K, center,
+        m, next_gap,
+        next_p, prev_p, tmp, tmp2, stats, record_stream);
 }
 
 
@@ -418,6 +462,7 @@ void push_to_overflow_batch(
     assert(gpu_batch.active[i] == 0);
     overflow_batch.gpu_batch.active[i] = true;
     mpz_add_ui(*overflow_batch.gpu_batch.z[i], center, sieve_start);
+    assert( sieve_start == ofs.coprime_X[min_x_i] );
 
     overflow_batch.data[i] = std::make_tuple(m, min_x_i, sieve_start);
     overflow_batch.composite_tmp[i].swap(composite_tmp);
@@ -429,11 +474,11 @@ void push_to_overflow_batch(
 static
 uint32_t run_overflow_batch(
         OverflowBatch &overflow_batch,
-        OverflowQueue &worker_queue,
         const float MIN_GAP_TO_CONTINUE,
-        const mpz_t &K, mpz_t &center,
-        mpz_t &tmp,
-        TestingStats &stats) {
+        const float MIN_MERIT, const float K_log, const uint32_t P, const uint32_t D,
+        const mpz_t &K, mpz_t &center, mpz_t &next_p, mpz_t &prev_p,
+        mpz_t &tmp, mpz_t& tmp2,
+        TestingStats &stats, std::ofstream &record_stream) {
 
     GPUBatch &gpu_batch = overflow_batch.gpu_batch;
     for (uint32_t i = 0; i < overflow_batch.N; i++) {
@@ -449,9 +494,6 @@ uint32_t run_overflow_batch(
     one_shot_batch( gpu_batch );
     stats.d_next_prime_gpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
-    // vector of things to later push to worker_queue
-    vector<Overflow> to_push;
-
     // Process results.
     s_start_t = high_resolution_clock::now();
     uint32_t finished_items = 0;
@@ -460,25 +502,36 @@ uint32_t run_overflow_batch(
             continue;
 
         assert (gpu_batch.result[i] == 0 || gpu_batch.result[i] == 1);
-        auto& [m, x_i, sieve_start] = overflow_batch.data[i];
+        auto [m, x_i, sieve_start] = overflow_batch.data[i];
 
         if (gpu_batch.result[i] == 1) {
             // Found nextprime for m!
             overflow_batch.remove_entry(i);
             finished_items++;
             stats.tested_gpu++;
-
-            mpz_mul_ui(center, K, m);
             uint32_t next_gap = ofs.coprime_X[x_i];
+
+            if (EXTRA_CHECKS) {
+                mpz_mul_ui(center, K, m);
+                mpz_add_ui(tmp, center, next_gap);
+                assert( mpz_cmp(tmp, *gpu_batch.z[i]) == 0 );
+            }
+
             if (next_gap < MIN_GAP_TO_CONTINUE) {
                 stats.skipped_prev++;
             } else {
-                to_push.emplace_back(m, next_gap, Overflow::Type::PREV_PRIME);
+                mpz_mul_ui(center, K, m);
+                handle_next_prime_result(
+                    MIN_GAP_TO_CONTINUE, MIN_MERIT, K_log, P, D,
+                    K, center,
+                    m, next_gap,
+                    next_p, prev_p, tmp, tmp2, stats, record_stream);
             }
 
         } else {
             // Advance to next test see `next_prime_distance`
             uint32_t last_x = ofs.coprime_X[x_i];
+
             uint32_t M = ofs.coprime_X.size();
             x_i++;
             for (; x_i < M; x_i++) {
@@ -486,127 +539,122 @@ uint32_t run_overflow_batch(
                 uint16_t j = x - sieve_start;
                 if ((overflow_batch.composite_tmp[i][j >> 3] & (1 << (j & 7))) == 0) {
                     mpz_add_ui(*gpu_batch.z[i], *gpu_batch.z[i], x - last_x);
+                    mpz_add_ui(tmp, center, x);
+                    // Write back updated x_i;
+                    std::get<1>(overflow_batch.data[i]) = x_i;
                     break;
                 }
             }
+
             if (x_i >= M) {
                 overflow_batch.remove_entry(i);
                 finished_items++;
-                to_push.emplace_back(m, ofs.coprime_X.back() + 1, Overflow::Type::NEXT_PRIME);
+                uint32_t min_x = ofs.coprime_X.back() + 1;
+
+                auto s_start_t = high_resolution_clock::now();
+                // Fallback to mpz_nextprime when > coprime_X[-1]
+                mpz_mul_ui(center, K, m);
+                mpz_add_ui(tmp, center, min_x);
+                mpz_nextprime(tmp, tmp);
+                mpz_sub(tmp, tmp, center);
+                uint32_t next_gap = mpz_get_ui(tmp);
+                double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                stats.d_next_prime_cpu += total_s;
+                stats.tested_cpu += 1;
+
+                handle_next_prime_result(
+                    MIN_GAP_TO_CONTINUE, MIN_MERIT, K_log, P, D,
+                    K, center,
+                    m, next_gap,
+                    next_p, prev_p, tmp, tmp2, stats, record_stream);
             }
         }
     }
     stats.d_next_prime_gpu_misc += duration<double>(high_resolution_clock::now() - s_start_t).count();
-
-    // Push all worker items in one batch.
-    if (to_push.size()) {
-        worker_queue.lock();
-        for (auto& o : to_push) {
-            worker_queue.queue.push_back(o);
-        }
-        worker_queue.size += to_push.size();
-        worker_queue.unlock();
-        worker_queue.size.notify_all();
-    }
 
     //printf("\tRan overflow on GPU found: %lu primes\n", overflow_batch.N - overflow_batch.added);
     return finished_items;
 }
 
 
-// gap, prev_gap, merit
-static
-void run_tests_on_cpu(
-        const float MIN_GAP_TO_CONTINUE, const float min_merit,
-        const double K_log, const uint32_t P, const uint32_t D,
-        const uint64_t m, const uint64_t min_x,
-        const mpz_t &K, mpz_t &center,
-        mpz_t &next_p, mpz_t &prev_p,
-        mpz_t &tmp, mpz_t &tmp2,
-        vector<uint8_t> &composite_tmp,
-        TestingStats &stats,
-        std::ofstream &record_stream) {
-
-    auto s_start_t = high_resolution_clock::now();
-    uint64_t next_gap = 0;
-    if (0) {
-        mpz_mul_ui(center, K, m);
-        mpz_add_ui(next_p, center, min_x);
-        mpz_nextprime(next_p, next_p);
-        mpz_sub(next_p, next_p, center);
-        next_gap = mpz_get_ui(next_p);
-    } else {
-        next_gap = next_prime_distance(
-                m, min_x,
-                K, center, tmp,
-                composite_tmp, stats);
-    }
-    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-    stats.d_next_prime_cpu += total_s;
-    stats.tested_cpu += 1;
-
-    handle_next_prime_result(
-        MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
-        K, center,
-        m, next_gap,
-        next_p, prev_p, tmp, tmp2, stats, record_stream);
-}
-
-
 void run_cpu_overflow_worker(const int thread_index,
-                             OverflowQueue &worker_queue,
                              const struct Config og_config,
-                             const mpz_t &K_in, TestingStats &stats) {
+                             TestingStats &stats) {
     {
         std::string name = std::format("CPU_WORKER_{}", thread_index);
         pthread_setname_np(pthread_self(), name.c_str());
         std::ignore = nice(+10);
     }
     mpz_t K, center, next_p, prev_p, tmp, tmp2;
-    mpz_init_set(K, K_in);
     mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
+    init_K(og_config, K);
 
-    //const float min_merit = og_config.min_merit;
     const uint32_t P = og_config.p;
     const uint32_t D = og_config.d;
 
     double K_log = calc_log_K(og_config);
-    const float min_merit = og_config.min_merit;
+    const float MIN_MERIT = og_config.min_merit;
+    // 2-5x what comes in per batch
+    const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
-    // TODO how to keep in sync with below?
     // See THEORY.md! Added const is small preference for doing less prev_p.
-    const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
+    const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(MIN_MERIT * std::log(2) + 1);
     const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(og_config.m_inc));
 
-    vector<uint8_t> composite_tmp;
     std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
-    while (true) {
-        auto [m, d, type] = worker_queue.wait_and_get();
-        if (!is_running || type == Overflow::Type::STOP_WORKER) {
+    OverflowBatch overflow_batch;
+    vector<uint8_t> composite_tmp;
+
+    while (is_running) {
+        // Wait till size is not zero
+        overflow.size.wait(0);
+
+        if (!is_running) {
+            break;
+        }
+        overflow.lock();
+        if (overflow.size == 0) {
+            overflow.unlock();
+            continue; // Might have been removed while locking.
+        }
+
+        if (stats.tested % 50'000 == 0 && overflow.size > overflow_too_much) {
+            printf("\tCPU Sieve Queue: %u open, %lu processed\n",
+                    overflow.size.load(), stats.tested.load());
+        }
+
+        // Maybe move this to the helper?
+        if (stop_queue > 0) {
+            uint32_t rem = overflow.size;
+            bool is_power_print = false;
+            for (uint64_t p = 1000; p <= rem; p *= 10) {
+                is_power_print |= (rem == p) || (rem == 2*p) || (rem == 5*p);
+            }
+            if (is_power_print) {
+                printf("\tFinalizing(stage %d): %u open, %lu processed\n",
+                    stop_queue.load(), rem,
+                    stats.tested.load());
+            }
+        }
+
+        assert( overflow.queue.size() == overflow.size );
+
+        auto [m, d, type] = overflow.queue.front(); overflow.queue.pop_front();
+        overflow.size--;
+
+        if ( type == Overflow::Type::NEXT_PRIME ) {
+            // Do this immediatly to prevent prints (above) with same tested value.
+            stats.tested++;
+        }
+        overflow.unlock();
+
+        if ( type == Overflow::Type::STOP_WORKER ) {
             break;
         }
 
-        if (type == Overflow::Type::PREV_PRIME) {
-
-            uint32_t next_gap = d;
-            mpz_mul_ui(center, K, m);
-            handle_next_prime_result(
-                MIN_GAP_TO_CONTINUE, min_merit, K_log, P, D,
-                K, center,
-                m, next_gap,
-                next_p, prev_p, tmp, tmp2, stats, record_stream);
-
-        } else if (type == Overflow::Type::NEXT_PRIME) {
-
-            uint32_t min_x = d;
-            run_tests_on_cpu(
-                MIN_GAP_TO_CONTINUE, min_merit,
-                K_log, P, D,
-                m, min_x,
-                K, center, next_p, prev_p, tmp, tmp2, composite_tmp, stats, record_stream);
-
-        } else if (type == Overflow::Type::SPOT_CHECK) {
+        // Handle SPOT_CHECK DIRECTLY
+        if ( type == Overflow::Type::SPOT_CHECK ) {
 
             uint32_t x = d;
             stats.spot_checked++;
@@ -623,13 +671,77 @@ void run_cpu_overflow_worker(const int thread_index,
             }
             double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
             stats.d_spot_check += total_s;
-        } else {
-            printf("Unknown element.type: %u\n", (uint8_t) type);
+            continue;
+        }
+
+        assert( type == Overflow::Type::NEXT_PRIME );
+        // stats.tested++ moved above.
+        auto min_x = d;
+
+        // This would mean that stop_x was poorly tuned.
+        assert(min_x + 500 < ofs.coprime_X.back());
+
+        { // Sieve and push that to overflow batch
+            uint32_t min_x_i = ofs.next_coprime_index[min_x];
+            uint32_t sieve_start = ofs.coprime_X[min_x_i];
+            assert( min_x <= sieve_start);
+
+            sieve_interval_cpu(
+                m, sieve_start, ofs.coprime_X.back() - sieve_start + 1,
+                composite_tmp, stats);
+
+            push_to_overflow_batch(
+                overflow_batch,
+                m, min_x_i, sieve_start,
+                K, center,
+                composite_tmp, stats);
+
+            if (overflow_batch.added == overflow_batch.N) {
+                for (size_t i = 0; i < 10; i++) {
+                    auto found = run_overflow_batch(
+                            overflow_batch,
+                            MIN_GAP_TO_CONTINUE, MIN_MERIT,
+                            K_log, P, D,
+                            K, center, next_p, prev_p, tmp, tmp2,
+                            stats, record_stream);
+                    if (found) break;
+                    printf("GPUBatch didn't find any primes?\n");
+                }
+            }
         }
     }
 
-    mpz_clear(K);
-    mpz_clears(center, next_p, prev_p, tmp, tmp2, NULL);
+    if (is_running) {
+        assert( (signed) overflow.size < og_config.cpu_threads ); // should contain only STOP_WORKER items
+
+        if (overflow_batch.added) {
+            // Clear out any remaining items queued in GPUBatch
+            if (og_config.verbose >= 1) {
+                printf("\tCPU overflow finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
+            }
+
+            // Slightly akward to run partial batches so handle on CPU.
+            GPUBatch &gpu_batch = overflow_batch.gpu_batch;
+            for (uint32_t i = 0; i < overflow_batch.N; i++) {
+                if (!gpu_batch.active[i])
+                    continue;
+
+                { // Run each remaining row of GPUBatch manually
+                    auto& [m, x_i, sieve_start] = overflow_batch.data[i];
+                    uint32_t next_x = ofs.coprime_X[x_i];
+                    uint32_t min_x = next_x;
+                    run_tests_on_cpu(
+                        MIN_GAP_TO_CONTINUE, MIN_MERIT,
+                        K_log, P, D,
+                        m, min_x,
+                        K, center, next_p, prev_p, tmp, tmp2, composite_tmp, stats, record_stream);
+                }
+                overflow_batch.remove_entry(i);
+            }
+        }
+    }
+
+    mpz_clears(K, center, next_p, prev_p, tmp, tmp2, NULL);
     if (og_config.verbose >= 3) {
         usleep(thread_index * 10'000); // X0ms
         printf("\tCPU overflow(%u) done\n", thread_index);
@@ -651,159 +763,21 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
         setup_overflow(og_config);
 
         TestingStats stats;
-        OverflowBatch overflow_batch;
-
-        // Pre-allocated
-        mpz_t K, center, next_p, prev_p, tmp, tmp2;
-        init_K(og_config, K);
-        mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
-        vector<uint8_t> composite_tmp;
-
-        double K_log = calc_log_K(og_config);
-        const float min_merit = og_config.min_merit;
-
-        // See THEORY.md! Added const is small preference for doing less prev_p.
-        const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
-        const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(og_config.m_inc));
-
-        // 2-5x what comes in per batch
-        const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
-
-        OverflowQueue worker_queue;
 
         std::vector<std::thread> worker_threads;
         for (int i = 0; i < og_config.cpu_threads; i++) {
             worker_threads.emplace_back(
                 run_cpu_overflow_worker,
-                i, std::ref(worker_queue), std::ref(og_config), std::ref(K), std::ref(stats)
+                i, std::ref(og_config), std::ref(stats)
             );
-        }
-
-        while (is_running) {
-            // Wait till size is not zero
-            overflow.size.wait(0);
-
-            if (!is_running) {
-                break;
-            }
-            overflow.lock();
-
-            if (stats.tested % 50'000 == 0 && overflow.size > overflow_too_much) {
-                printf("\tCPU Sieve Queue: %u open, %lu processed\n",
-                        overflow.size.load(), stats.tested.load());
-            }
-
-            // Maybe move this to the helper?
-            if (stop_queue > 0) {
-                uint32_t rem = overflow.size + worker_queue.size;
-                bool is_power_print = false;
-                for (uint64_t p = 1000; p <= rem; p *= 10) {
-                    is_power_print |= (rem == p) || (rem == 2*p) || (rem == 5*p);
-                }
-                if (is_power_print) {
-                    printf("\tFinalizing(stage %d): %u(%u + %u) open, %lu processed\n",
-                        stop_queue.load(), rem,
-                        overflow.size.load(), worker_queue.size.load(),
-                        stats.tested.load());
-                }
-            }
-
-            if (overflow.size == 0)
-                continue; // Might have been removed while locking.
-
-            assert( overflow.queue.size() == overflow.size );
-
-            Overflow overflowed = overflow.queue.front(); overflow.queue.pop_front();
-            overflow.size--;
-            overflow.unlock();
-
-            if (overflowed.type == Overflow::Type::STOP_WORKER) {
-                break;
-            }
-
-            if (!USE_GPU_FOR_OVERFLOW ||
-                    (overflowed.type == Overflow::Type::SPOT_CHECK
-                        || overflowed.type == Overflow::Type::PREV_PRIME)) {
-                // Forward directly to worker_queue.
-                worker_queue.push_to_queue(overflowed.m, overflowed.d, overflowed.type);
-                continue;
-            }
-
-            assert( overflowed.type == Overflow::Type::NEXT_PRIME );
-
-            // Do this before testing to prevent multiple CPU Sieve Queue prints on same tested value.
-            stats.tested++;
-            auto m = overflowed.m;
-            auto min_x = overflowed.d;
-
-            { // Sieve and push that to overflow batch
-                uint32_t min_x_i = ofs.next_coprime_index[min_x];
-                uint32_t sieve_start = ofs.coprime_X[min_x_i];
-                assert( min_x <= sieve_start);
-
-                sieve_interval_cpu(
-                    m, sieve_start, ofs.coprime_X.back() - sieve_start + 1,
-                    composite_tmp, stats);
-
-                push_to_overflow_batch(
-                    overflow_batch,
-                    m, min_x_i, sieve_start,
-                    K, center,
-                    composite_tmp, stats);
-
-                if (overflow_batch.added == overflow_batch.N) {
-                    for (size_t i = 0; i < 10; i++) {
-                        auto found = run_overflow_batch(
-                                overflow_batch,
-                                worker_queue,
-                                MIN_GAP_TO_CONTINUE,
-                                K, center, tmp, stats);
-                        if (found) break;
-                        printf("GPUBatch didn't find any primes?\n");
-                    }
-                }
-            }
-        }
-
-        if (is_running) {
-            assert( overflow.size == 0 );
-
-            if (overflow_batch.added) {
-                // Clear out any remaining items queued in GPUBatch
-                if (og_config.verbose >= 1) {
-                    printf("\tCPU overflow finishing %lu remaining items in GPUBatch\n", overflow_batch.added);
-                }
-
-                // Slightly akward to run partial batches so handle on CPU.
-                GPUBatch &gpu_batch = overflow_batch.gpu_batch;
-                for (uint32_t i = 0; i < overflow_batch.N; i++) {
-                    if (!gpu_batch.active[i])
-                        continue;
-
-                    { // Push each row of GPUBatch to worker_queue.
-                        auto& [m, x_i, sieve_start] = overflow_batch.data[i];
-                        uint32_t next_x = ofs.coprime_X[x_i];
-                        worker_queue.push_to_queue(m, next_x, Overflow::Type::NEXT_PRIME);
-                    }
-                    overflow_batch.remove_entry(i);
-                }
-            }
-
-            // Would be nice to wait for overflow_batch to have 0 size
-            // Can't really wait on the atomic because it changes X'XXX times
-        }
-
-        if (og_config.verbose >= 2) {
-            printf("\tCPU overflow coordinator work done!\n");
-        }
-
-        for (uint32_t i = 0; i < worker_threads.size(); i++) {
-            worker_queue.push_to_queue(0, 0, Overflow::Type::STOP_WORKER);
         }
 
         for (auto &worker : worker_threads) {
             worker.join();
         }
+
+        if (is_running)
+            assert( overflow.size == 0 ); // Should be empty now
 
         if (og_config.verbose >= 1 and stats.tested > 0) {
             printf("\nCPU OVERFLOW Timing:\n");
@@ -831,7 +805,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     stats.tested_gpu / stats.d_next_prime_gpu);
             uint32_t large = stats.greater_than_min_merit;
             if (large) {
-                printf("\t> %.1f merit: %u\n", min_merit, large);
+                printf("\t> %.1f merit: %u\n", og_config.min_merit, large);
                 if (stats.pseudoprimes || stats.mismatches) {
                     printf("\tMismatches | Fermat: %lu, Other: %lu\n",
                             stats.pseudoprimes.load(), stats.mismatches.load());
@@ -846,8 +820,6 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
             printf("\n");
         }
 
-        mpz_clear(K);
-        mpz_clears(center, next_p, prev_p, tmp, tmp2, NULL);
     } catch (const std::exception &e) {
         cout << "ERROR in run_cpu_overflow_thread" << endl;
         cout << e.what() << endl;

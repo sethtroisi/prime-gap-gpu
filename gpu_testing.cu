@@ -131,7 +131,8 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
     }
 
 #ifdef GPU_TESTING
-    if (found > 0 && (rand() & 255) == 0) {
+    // Spot check roughly one in a million.
+    if (found > 0 && (rand() & 63) == 0) {
         // Spot check
         overflow.push_to_queue(
                 test_data.m_start + m_i, batch.x,
