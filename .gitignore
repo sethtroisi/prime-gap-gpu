@@ -1,6 +1,8 @@
 
 # Programs
 gap_search_gpu
+gap_search_gpu_old
+gpu_benchmark
 *.o
 a.out
 
@@ -23,6 +25,8 @@ temp_tests.log
 perf.data
 perf.data.old
 records_*.txt
+gpu_stats.csv
+t.py
 
 # PrimeForms
 pfgw

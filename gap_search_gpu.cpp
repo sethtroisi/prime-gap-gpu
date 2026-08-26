@@ -855,6 +855,7 @@ void run_testing_thread(const struct Config og_config) {
 
         const float min_merit = og_config.min_merit;
 
+        // TODO: Move this output into overflow.cpp
         // See THEORY.md! Added const is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
 

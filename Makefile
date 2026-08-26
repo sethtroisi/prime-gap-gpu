@@ -44,6 +44,9 @@ gpu_testing.o: gpu_testing.cu
 gap_search_gpu: gap_search_gpu.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
+gpu_benchmark: gpu_benchmark.cu gap_common.o
+	nvcc $^ -o $@ -DGPU_BITS=$(BITS) $(CUDA_FLAGS) -I../CGBN/include $(LDFLAGS)
+
 .PHONY: all clean
 
 clean:

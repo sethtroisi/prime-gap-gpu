@@ -23,6 +23,8 @@
 extern const size_t GPU_BATCHES;
 extern const size_t GPU_BATCH_SIZE;
 
+// TODO can GPUBatch move here to help gpu_benchmark.cu?
+
 // TODO experimental
 void one_shot_batch(GPUBatch& batch);
 
