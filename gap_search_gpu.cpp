@@ -1152,5 +1152,9 @@ void prime_gap_test(struct Config config) {
             cout << "\toverflow joined" << endl;
     }
 
+    if (config.verbose >= 1 && is_running) {
+        printf("\tresume at --mstart=%lu\n", sieve_data->config.m_start);
+    }
+
     mpz_clear(K);
 }

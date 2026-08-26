@@ -96,8 +96,7 @@ These are likely set to good values
         * Less dynamic flexibility
 
 ## TODO
-
-  * [ ] Print next `m_start` if `stop_queue==2` and not `!is_running`
+  * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
   * [ ] Test removing ROUNDS from miller-rabin
   * [ ] Faster sieving
     * [ ] Tune 995'000 constant
