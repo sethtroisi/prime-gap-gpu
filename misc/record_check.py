@@ -21,6 +21,7 @@ Replaces some awk hackery.
 
 import argparse
 import glob
+import math
 import os.path
 import re
 import sqlite3
@@ -84,11 +85,18 @@ def find_possible_records(args):
         assert 73 <= P <= 5000
         assert 1 <= D <= 2 ** 20
 
+        t = f"%{P}#%/%{D}%"
+        all_m = conn.execute(
+            'SELECT startprime FROM gaps WHERE startprime like ?',
+            (t,)).fetchall()
+        if all_m:
+            M = max(int(re.match(r'[0-9]+', start[0]).group(0)) for start in all_m)
+            print(f"Found {len(all_m)} records, max M={M:,}")
+
         K = gmpy2.primorial(P) // D
-        N = 10 ** 12 * K
+        N = M * K * 14 // 10
         N_log = gmpy2.log(N)
         digits = gmpy2.num_digits(N) - 2
-
 
         possible = conn.execute(
             'SELECT gapsize,merit,startprime FROM gaps WHERE'
