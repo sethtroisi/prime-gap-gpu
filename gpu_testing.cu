@@ -54,10 +54,6 @@ const int BITS = 1024;
 const int WINDOW_BITS = (BITS <= 1024) ? 5 : 6;
 const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
 
-// Always use 1.
-// TODO try simplifying miller_rabin and see if it changes speed.
-const int ROUNDS = 1;
-
 #endif // GPU_TESTING
 
 /**
@@ -213,7 +209,7 @@ inline void fill_batch(
  */
 #ifdef GPU_TESTING
 typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+test_runner_t<params> runner(GPU_BATCH_SIZE);
 #endif // GPU_TESTING
 
 
@@ -256,7 +252,7 @@ void run_gpu_thread(int runner_num, int verbose,
 
 #ifdef GPU_TESTING
         typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-        test_runner_t<params> runner(GPU_BATCH_SIZE, ROUNDS);
+        test_runner_t<params> runner(GPU_BATCH_SIZE);
 #endif // GPU_TESTING
 
         size_t processed_batches = 0;

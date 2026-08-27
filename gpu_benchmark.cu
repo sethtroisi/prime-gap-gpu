@@ -41,7 +41,6 @@ const int BITS = 1024;
 
 const int WINDOW_BITS = (BITS <= 1024) ? 5 : 6;
 const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
-const int ROUNDS = 1;
 const size_t GPU_BATCHES = 3;
 const size_t GPU_BATCH_SIZE = 8 * 1024;
 
@@ -72,7 +71,7 @@ void run_benchmark_thread(const struct Config og_config) {
     const uint32_t N = GPU_BATCH_SIZE;
 
     typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-    test_runner_t<params> runner(N, ROUNDS);
+    test_runner_t<params> runner(N);
 
     GpuStatsCounters stats;
 

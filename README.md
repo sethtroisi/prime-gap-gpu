@@ -97,7 +97,6 @@ These are likely set to good values
 
 ## TODO
   * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
-  * [ ] Test removing ROUNDS from miller-rabin
   * [ ] Faster sieving
     * [ ] Tune 995'000 constant
     * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial

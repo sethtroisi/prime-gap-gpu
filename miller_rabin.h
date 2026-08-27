@@ -213,8 +213,8 @@ class miller_rabin_t {
     cgbn_mont2bn(_env, x, x, modulus, np0);
   }
 
-  __device__ __forceinline__ uint32_t miller_rabin(const bn_t &candidate, uint32_t *primes, uint32_t prime_count) {
-    int       k, trailing, count;
+  __device__ __forceinline__ uint32_t miller_rabin(const bn_t &candidate) {
+    int       trailing, count;
     bn_t      x, power, minus_one;
     bn_wide_t w;
 
@@ -222,35 +222,34 @@ class miller_rabin_t {
     trailing=cgbn_ctz(_env, power);
     cgbn_rotate_right(_env, power, power, trailing);
 
-    for(k=0;k<prime_count;k++) {
-      cgbn_set_ui32(_env, x, primes[k]);
-      powm(x, power, candidate);
-      cgbn_sub_ui32(_env, minus_one, candidate, 1);
-      if(!cgbn_equals_ui32(_env, x, 1) && !cgbn_equals(_env, x, minus_one)) {
-        // x is neither 1, nor candidate-1
-        if(trailing==1)
-          return k;
+    // do single round Fermat, base 2, test
+    cgbn_set_ui32(_env, x, /*base*/ 2);
+    powm(x, power, candidate);
+    cgbn_sub_ui32(_env, minus_one, candidate, 1);
+    if(!cgbn_equals_ui32(_env, x, 1) && !cgbn_equals(_env, x, minus_one)) {
+      // x is neither 1, nor candidate-1
+      if(trailing==1)
+        return 0;
 
-        // in the case of random data, trailing=ctz(candidate-1) is on average quite small.  If trailing is large,
-        // then you might want to do the reduction with Barrett remainders or in Montgomery space.
-        count=trailing;
-        while(true) {
-          cgbn_sqr_wide(_env, w, x);
-          cgbn_rem_wide(_env, x, w, candidate);
-          if(cgbn_equals(_env, x, minus_one))
-            break;
-          if(--count==0 || cgbn_equals_ui32(_env, x, 1))
-            return k;
-        }
+      // in the case of random data, trailing=ctz(candidate-1) is on average quite small.  If trailing is large,
+      // then you might want to do the reduction with Barrett remainders or in Montgomery space.
+      count=trailing;
+      while(true) {
+        cgbn_sqr_wide(_env, w, x);
+        cgbn_rem_wide(_env, x, w, candidate);
+        if(cgbn_equals(_env, x, minus_one))
+          break;
+        if(--count==0 || cgbn_equals_ui32(_env, x, 1))
+          return 0;
       }
     }
-    return prime_count;
+    return 1;
   }
 };
 
 
 template<class params>
-__global__ void kernel_miller_rabin(cgbn_error_report_t *report, typename miller_rabin_t<params>::instance_t *instances, uint32_t instance_count, uint32_t *primes, uint32_t prime_count) {
+__global__ void kernel_miller_rabin(cgbn_error_report_t *report, typename miller_rabin_t<params>::instance_t *instances, uint32_t instance_count) {
 
   int32_t instance=(blockIdx.x*blockDim.x + threadIdx.x)/params::TPI;
   if(instance>=instance_count)
@@ -264,7 +263,7 @@ __global__ void kernel_miller_rabin(cgbn_error_report_t *report, typename miller
 
   cgbn_load(mr._env, candidate, &(instances[instance].candidate));
 
-  passed=mr.miller_rabin(candidate, primes, prime_count);
+  passed=mr.miller_rabin(candidate);
 
   instances[instance].passed=passed;
 }
@@ -302,26 +301,19 @@ class test_runner_t {
        * Performance is maximized by setting this to be large (e.g. 1024 - 8192)
        */
       const size_t n;
-      /**
-       * Number of primes to test in miller rabin
-       * 1 = Fermat-test, more is slower but more certain
-       */
-      const size_t rounds;
 
       instance_t *instances, *gpuInstances;
       const size_t instance_size;
 
       cgbn_error_report_t *report;
-      uint32_t *primes, *gpuPrimes;
 
       uint32_t TPB=(params::TPB==0) ? 128 : params::TPB;
       uint32_t TPI=params::TPI, IPB=TPB/TPI;
 
       cudaStream_t runner_stream;
 
-      test_runner_t(size_t n, size_t rounds) :
-              n(n), rounds(rounds), instance_size(sizeof(instance_t) * n) {
-          primes = generate_primes(rounds);
+      test_runner_t(size_t n) :
+              n(n), instance_size(sizeof(instance_t) * n) {
 
           // Create with pinned memory
           if (USE_PINNED_MEMORY) {
@@ -333,9 +325,6 @@ class test_runner_t {
 
           CUDA_CHECK(cudaSetDevice(0));
           CUDA_CHECK(cudaMalloc((void **)&gpuInstances, instance_size));
-
-          CUDA_CHECK(cudaMalloc((void **)&gpuPrimes, sizeof(uint32_t) * rounds));
-          CUDA_CHECK(cudaMemcpy(gpuPrimes, primes, sizeof(uint32_t) * rounds, cudaMemcpyHostToDevice));
 
           CUDA_CHECK(cudaStreamCreate(&runner_stream));
 
@@ -349,13 +338,11 @@ class test_runner_t {
       }
 
       ~test_runner_t() {
-          free(primes);
           if (USE_PINNED_MEMORY) {
               CUDA_CHECK(cudaFreeHost(instances));
           } else {
               free(instances);
           }
-          CUDA_CHECK(cudaFree(gpuPrimes));
           CUDA_CHECK(cudaFree(gpuInstances));
           CUDA_CHECK(cudaStreamDestroy(runner_stream));
           CUDA_CHECK(cgbn_error_report_free(report));
@@ -379,7 +366,7 @@ class test_runner_t {
 
           cgbn_error_report_reset(report);
 
-          //printf("Copying primes and instances to the GPU ...\n");
+          //printf("Copying instances to the GPU ...\n");
           CUDA_CHECK(cudaMemcpyAsync(
              gpuInstances, instances, sizeof(instance_t) * tests.size(), cudaMemcpyHostToDevice,
              runner_stream));
@@ -389,9 +376,7 @@ class test_runner_t {
           kernel_miller_rabin<params><<<blocks, TPB, 0, runner_stream>>>(
                   report,
                   gpuInstances,
-                  to_run,
-                  gpuPrimes,
-                  rounds);
+                  to_run);
 
           // error report uses managed memory, so we sync the device (or stream) and check for cgbn errors
           // copy the instances back from gpuMemory
@@ -403,7 +388,7 @@ class test_runner_t {
           CGBN_CHECK(report);
 
           for (size_t i = 0; i < to_run; i++) {
-              results[i] = (instances[i].passed == rounds);
+              results[i] = (instances[i].passed == 1);
           }
       }
 };
