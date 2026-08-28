@@ -74,6 +74,10 @@ def get_arg_parser():
         default=None,
         help="P#/D e.g. 2221#/2310")
 
+    parser.add_argument(
+        '-v', '--verify', action="store_true",
+        help="Verify records")
+
     return parser
 
 
@@ -138,15 +142,23 @@ def describe_found_gaps(gaps):
         ))
     print()
 
-    if False:
-        T0 = time.time()
-        for gap, merit, _, start, _ in gaps:
+
+def verify(gaps):
+    T0 = time.time()
+    for gap, merit, _, start, _ in gaps:
+        try:
             n = primegapverify.parse(start)
             assert gmpy2.is_prime(n), (start)
             assert gmpy2.is_prime(n + gap), (start, gap)
             assert gmpy2.next_prime(n+1) == n + gap
             assert gmpy2.prev_prime(n+1) == n
-        print(f"Verified Gaps ({time.time() - T0:.2f}s)")
+        except:
+            print("Replace", _)
+            g = gmpy2.next_prime(n) - n
+            m = g / gmpy2.log(n)
+            print(f"{g} {m:.3f} {start}")
+
+    print(f"Verified Gaps ({time.time() - T0:.2f}s)")
 
 
 def record_line_sort(line):
@@ -333,6 +345,8 @@ def search_logs(log_files):
 
     if gaps:
         describe_found_gaps(gaps)
+        if args.verify:
+            verify(gaps)
         print_record_gaps(args, gaps)
     else:
         print("Didn't find any gaps in logs files: %s".format(

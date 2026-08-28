@@ -192,6 +192,7 @@ void process_result(
                 printf("\tGAP MISMATCH! %lu vs %lu at %lu * %u# / %u + %lu\n",
                         test_gap, gap, m, P, D, test_gap - prev_gap);
             }
+            gap = test_gap;
             merit = test_gap / (K_log + log(m));
         }
 
