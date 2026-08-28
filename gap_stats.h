@@ -97,11 +97,13 @@ class GpuStatsCounters {
         uint64_t wait_not_active = 0;
         double d_wait_not_active = 0.0;
 
+        double d_loop = 0.0;
+        double d_lock = 0.0;
         double d_fill = 0.0;
-        double d_queued_full = 0.0;
+        double d_misc = 0.0;
         double d_run = 0.0;
-        double d_queued_done = 0.0;
         double d_results = 0.0;
+        double d_done = 0.0;
 
         void reset() {
             total_prp_tests = 0;
@@ -113,25 +115,29 @@ class GpuStatsCounters {
             wait_not_active = 0;
             d_wait_not_active = 0.0;
 
+            d_loop = 0.0;
+            d_lock = 0.0;
             d_fill = 0.0;
-            d_queued_full = 0.0;
+            d_misc = 0.0;
             d_run = 0.0;
-            d_queued_done = 0.0;
             d_results = 0.0;
+            d_done = 0.0;
         }
 
         void merge(GpuStatsCounters other) {
-            total_prp_tests += other.total_prp_tests;
-            total_primes    += other.total_primes;
-            batches_run     += other.batches_run;
-            batches_partial += other.batches_partial;
-            wait_not_active += other.wait_not_active;
+            total_prp_tests   += other.total_prp_tests;
+            total_primes      += other.total_primes;
+            batches_run       += other.batches_run;
+            batches_partial   += other.batches_partial;
+            wait_not_active   += other.wait_not_active;
             d_wait_not_active += other.d_wait_not_active;
-            d_fill          += other.d_fill;
-            d_queued_full   += other.d_queued_full;
-            d_run           += other.d_run;
-            d_queued_done   += other.d_queued_done;
-            d_results       += other.d_results;
+            d_loop            += other.d_loop;
+            d_lock            += other.d_lock;
+            d_fill            += other.d_fill;
+            d_misc            += other.d_misc;
+            d_run             += other.d_run;
+            d_results         += other.d_results;
+            d_done            += other.d_done;
         }
 };
 

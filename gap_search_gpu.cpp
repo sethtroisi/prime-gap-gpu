@@ -139,17 +139,21 @@ void TestData::print_stats() {
     printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
             gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
             gpu_stats.wait_not_active);
+    printf("\t---------------------------------------\n");
+    printf("\tlooping         : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_loop, 100 * gpu_stats.d_loop / total_t);
+    printf("\tlocking         : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_lock, 100 * gpu_stats.d_lock / total_t);
     printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
     printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_run, 100 * gpu_stats.d_run / total_t);
-    double total_waiting = gpu_stats.d_queued_full + gpu_stats.d_queued_done;
-    if (100 * total_waiting > total_t) {
-        printf("\twaitfilled+done : %.1f seconds (%.1f%%)\n",
-                total_waiting, 100 * total_waiting / total_t);
-    }
+    printf("\tmisc            : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_misc, 100 * gpu_stats.d_misc / total_t);
     printf("\tresults         : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
+    printf("\twait done       : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_done, 100 * gpu_stats.d_done / total_t);
     printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
             100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
             100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
@@ -368,32 +372,6 @@ void SieveData::increment_X() {
         printf("\tMoving to X=%ld\n", current_testing_x);
     }
 }
-
-void GPUBatch::lock() {
-    while (flag.exchange(1) == 1) {
-        flag.wait(1, std::memory_order_relaxed);
-    }
-}
-
-void GPUBatch::unlock() {
-    assert(flag.load() == 1); // locked (because we own it)
-    flag = 0;
-    flag.notify_one();
-}
-
-void GPUBatch::wait_for_state_and_lock(State desired) {
-    while (1) {
-        lock();
-        auto current = state.load();
-        if (current == desired || !is_running) {
-            return;
-        }
-        unlock();
-        // Wait for state change
-        state.wait(current);
-    }
-}
-
 
 /**
  * Return a^-1 mod p
@@ -947,6 +925,8 @@ void run_testing_thread(const struct Config og_config) {
 
                 continue;
             }
+
+            // run_gpu_thread running batches till test_data is done
 
             assert( state == TestData::ACTIVE || state == TestData::DONE );
             if (state == TestData::ACTIVE ) {

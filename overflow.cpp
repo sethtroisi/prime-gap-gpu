@@ -35,7 +35,6 @@
 
 #include "gap_common.h"
 #include "gap_stats.h"
-#include "gap_search_gpu.h"
 #include "gpu_testing.h"
 
 

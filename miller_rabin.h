@@ -263,9 +263,8 @@ __global__ void kernel_miller_rabin(cgbn_error_report_t *report, typename miller
 
   cgbn_load(mr._env, candidate, &(instances[instance].candidate));
 
-  passed=mr.miller_rabin(candidate);
-
-  instances[instance].passed=passed;
+  passed = mr.miller_rabin(candidate);
+  instances[instance].passed = passed;
 }
 
 uint32_t *generate_primes(uint32_t count) {

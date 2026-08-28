@@ -146,8 +146,6 @@ inline void fill_batch(
         uint32_t gpu_i,
         TestData &test_data,
         GPUBatch& batch,
-        const mpz_t &K,
-        mpz_t &t,
         const uint32_t x) {
     assert( batch.state == GPUBatch::EMPTY );
 
@@ -163,7 +161,6 @@ inline void fill_batch(
     uint32_t first_test_i = test_data.test_i;
     {
         assert( test_data.state == TestData::ACTIVE );
-        uint64_t m_start = test_data.m_start;
         uint32_t gpu_i = batch.i;  // [GPU] batch index
         size_t j = test_data.test_i;
         for (; j < test_data.unknown_m_i.size() && gpu_i < GPU_BATCH_SIZE; j++) {
@@ -176,9 +173,6 @@ inline void fill_batch(
             if (test_data.found_prime_m_i[index >> 5] & (1 << (index & 31)))
                 continue;
 
-            uint64_t m = m_start + m_i;
-            mpz_mul_ui(t, K, m);
-            mpz_add_ui(*batch.z[gpu_i], t, x);
             batch.active[gpu_i] = true;
             batch.m_i[gpu_i] = m_i;
             gpu_i++;
@@ -255,26 +249,34 @@ void run_gpu_thread(int runner_num, int verbose,
         mpz_init_set(K, K_in);
         mpz_init(t);
 
+        batch.just_paused = true;
+        batch.results_end = high_resolution_clock::now();
+
 #ifdef GPU_TESTING
         test_runner_t<gpu_params> runner{GPU_BATCH_SIZE};
 #endif // GPU_TESTING
 
         size_t processed_batches = 0;
         while (is_running && stop_queue <= 1) {
-            batch.wait_for_state_and_lock(GPUBatch::EMPTY);
-            if (!is_running || stop_queue > 1) {
+            if (batch.state != GPUBatch::EMPTY) {
+                batch.wait_for_state_and_lock(GPUBatch::EMPTY);
                 batch.unlock();
+            }
+            if (!is_running || stop_queue > 1) {
                 break;
             }
 
             assert( batch.state == GPUBatch::EMPTY );
-
+            auto last_result_end = batch.results_end;
             { // Fill Batch logic
+                batch.lock_start = high_resolution_clock::now();
                 test_data.lock();
                 assert( !test_data.unknown_m_i.empty() );
+                const uint64_t m_start = test_data.m_start;
+                const uint64_t x = test_data.testing_x;
 
                 batch.fill_start = high_resolution_clock::now();
-                fill_batch(runner_num, test_data, batch, K, t, test_data.testing_x);
+                fill_batch(runner_num, test_data, batch, x);
                 batch.fill_end = high_resolution_clock::now();
 
                 if (batch.i == 0) {
@@ -282,7 +284,8 @@ void run_gpu_thread(int runner_num, int verbose,
                     // If last prime was just recently found prime
                     assert( test_data.test_i == test_data.unknown_m_i.size() );
                     batch.state = GPUBatch::WAITING;
-                    batch.unlock();
+                    batch.just_paused = true;
+                    // batch.unlock()
                     test_data.active_batches -= 1;
                     if (test_data.active_batches == 0) {
                         assert( test_data.running_batches == 0 );
@@ -296,6 +299,15 @@ void run_gpu_thread(int runner_num, int verbose,
                     batch.state = GPUBatch::RUNNING;
                 }
                 test_data.unlock();
+
+                // Batch was filled, test_data unlocked now handle mpz_mul
+                // XXX: Could move into todo with seperate entry point miller_rabin
+                // helps offload a lot of mults, could reduce from_mpz cost
+                for (uint32_t i = 0; i < batch.i; i++) {
+                    uint64_t m = m_start + batch.m_i[i];
+                    mpz_mul_ui(t, K, m);
+                    mpz_add_ui(*batch.z[i], t, x);
+                }
             }
 
             // Verify all active items are all at the front of the batch.
@@ -330,7 +342,6 @@ void run_gpu_thread(int runner_num, int verbose,
             // if batch.unlock() above would need to batch.lock() here.
             {
                 batch.gpu_end = high_resolution_clock::now();
-                batch.results_start = high_resolution_clock::now();
 
                 // Process Batch (grabs test_data.lock internally)
                 batch.primes_in_batch = process_finished_batch(test_data, batch);
@@ -342,26 +353,35 @@ void run_gpu_thread(int runner_num, int verbose,
                 batch.stats.total_prp_tests += batch.i;
                 batch.stats.total_primes += batch.primes_in_batch;
 
+                double ms_wait = duration<double>(batch.lock_start - last_result_end).count();
+                double ms_lock = duration<double>(batch.fill_start - batch.lock_start).count();
                 double ms_fill = duration<double>(batch.fill_end - batch.fill_start).count();
-                double ms_queued_full = duration<double>(batch.gpu_start - batch.fill_end).count();
+                double ms_misc = duration<double>(batch.gpu_start - batch.fill_end).count();
                 double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
-                double ms_results = duration<double>(batch.results_end - batch.results_start).count();
+                double ms_results = duration<double>(batch.results_end - batch.gpu_end).count();
 
                 batch.stats.batches_run += 1;
                 batch.stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
+                if (batch.just_paused) {
+                    batch.stats.d_done += ms_wait;
+                    batch.just_paused = false;
+                } else {
+                    batch.stats.d_loop += ms_wait;
+                }
+                batch.stats.d_lock += ms_lock;
                 batch.stats.d_fill += ms_fill;
-                batch.stats.d_queued_full += ms_queued_full;
+                batch.stats.d_misc += ms_misc;
                 batch.stats.d_run += ms_run;
                 batch.stats.d_results += ms_results;
 
                 if (verbose >= 4) {
                     test_data.lock();
                     printf("\tbatch(%u-%lu): %u primes | "
-                            "batch timing fill: %.5f, gpu: %.5f, processing results: %.5f | "
+                            "batch timing [%.5f last], %.5f, %.5f, %.5f, %.5f, %.5f"
                             "%u running %lu/%lu tested\n",
                             runner_num, batch.stats.batches_run,
                             batch.primes_in_batch,
-                            ms_fill, ms_run, ms_results,
+                            ms_wait, ms_lock, ms_fill, ms_misc, ms_run, ms_results,
                             test_data.running_batches.load() - 1, // -1 for us.
                             test_data.test_i, test_data.unknown_m_i.size());
                     test_data.unlock();
@@ -369,7 +389,8 @@ void run_gpu_thread(int runner_num, int verbose,
             }
 
             batch.state = GPUBatch::EMPTY;
-            batch.unlock();
+            // batch.unlock();
+            // TODO is this safe?
             test_data.running_batches -= 1;
         }
 
