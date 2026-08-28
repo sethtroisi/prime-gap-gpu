@@ -96,7 +96,9 @@ These are likely set to good values
         * Less dynamic flexibility
 
 ## TODO
+  * [ ] Reduce the 10% of the time sieve is late
   * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
+  * [ ] Test `WINDOW_BITS=4 for BITS=256'
   * [ ] Faster sieving
     * [ ] Tune 995'000 constant
     * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial

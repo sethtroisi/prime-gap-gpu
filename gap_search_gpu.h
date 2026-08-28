@@ -97,10 +97,9 @@ class TestData {
 
         /** Should hold lock during */
         void maybe_print_stats() {
-            // s_gap_out_of_sieve_prev is actually count of intervals
-            uint64_t c = stats.s_gap_out_of_sieve_prev;
+            uint64_t c = stats.batches;
             bool is_power_print = false;
-            for (uint64_t p = 1000; p <= c; p *= 10) {
+            for (uint64_t p = 1; p <= c; p *= 10) {
                 is_power_print |= (c == p) || (c == 2*p) || (c == 5*p);
             }
             if (is_power_print) {

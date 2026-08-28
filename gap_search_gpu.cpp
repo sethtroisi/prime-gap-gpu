@@ -127,15 +127,22 @@ void TestData::print_stats() {
     setlocale(LC_NUMERIC, "");
     printf("\nGPU Timings (%.0f seconds):\n", total_t);
     printf("\tm               : %'lu (%'u/sec)\n",
-            stats.s_gap_out_of_sieve_prev, (uint32_t) (stats.s_gap_out_of_sieve_prev / total_t));
+            stats.total_m, (uint32_t) (stats.total_m / total_t));
     printf("\tm processed     : %'lu (%'u/sec)\n",
-            stats.s_tests, (uint32_t) (stats.s_tests / total_t));
+            stats.tested_m, (uint32_t) (stats.tested_m / total_t));
     printf("\ttotal tests     : %'lu (%.1f%% prime) (%'u/sec)\n",
             gpu_stats.total_prp_tests,
             100.0 * gpu_stats.total_primes / gpu_stats.total_prp_tests,
             (uint32_t) (gpu_stats.total_prp_tests / total_t));
     printf("\ttotal batches   : %'lu (%.5f secs/batch)\n",
             gpu_stats.batches_run, total_t / gpu_stats.batches_run);
+    printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
+            stats.s_gap_out_of_sieve_next,
+            100.0 * stats.s_gap_out_of_sieve_next / stats.tested_m);
+    printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
+            100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
+            100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
+    );
     printf("\twaiting 4 sieve : %.1f seconds (%.1f%%) %lu count \n",
             gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
             gpu_stats.wait_not_active);
@@ -154,13 +161,6 @@ void TestData::print_stats() {
             gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
     printf("\twait done       : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_done, 100 * gpu_stats.d_done / total_t);
-    printf("\tbatch fill %%    : %.1f%% (%% fill), %.1f%% (%% partial batch)\n",
-            100.0 * gpu_stats.total_prp_tests / gpu_stats.batches_run / GPU_BATCH_SIZE ,
-            100.0 * gpu_stats.batches_partial / gpu_stats.batches_run
-    );
-    printf("\toverflowed      : %'lu (%.1f%% of ranges)\n",
-            stats.s_gap_out_of_sieve_next,
-            100.0 * stats.s_gap_out_of_sieve_next / stats.s_tests);
     printf("\n");
     setlocale(LC_NUMERIC, "C");
 }
@@ -468,7 +468,7 @@ void run_sieve_thread(void) {
         uint64_t total_runs = 0;
         uint64_t total_active = 0;
         uint64_t total_unknown = 0;
-        uint64_t total_primes = 0;
+        double avg_primes = 0;
         double total_time = 0;
         double finalize_time = 0;
 
@@ -671,7 +671,6 @@ void run_sieve_thread(void) {
             double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();
             total_runs += 1;
             total_time += sieve_duration_t;
-            total_primes += prime;
 
             lock.lock();
 
@@ -716,6 +715,7 @@ void run_sieve_thread(void) {
 
                 unknowns_size = tests->size();
                 assert( active_size < 1'000 || unknowns_size > 0 );
+                avg_primes += 1.0 * prime * active_size;
                 total_active += active_size;
                 total_unknown += unknowns_size;
 
@@ -762,7 +762,7 @@ void run_sieve_thread(void) {
                     total_m, (uint32_t) (total_m / total_s), total_s);
             printf("\tsieves: %lu\n",
                     total_runs);
-            printf("\tavg prime: %'lu\n", total_primes / total_runs);
+            printf("\tavg prime: %'lu\n", (uint64_t) (avg_primes / total_active));
             printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
             printf("\ttotal_time: %.1f seconds (%.3f/sieve, %.3f secs/billion)\n",
@@ -960,7 +960,14 @@ void run_testing_thread(const struct Config og_config) {
                 remove_vector(sieve_data->active_m_i, test_data.found_prime_m_i);
                 if (sieve_data->active_m_i.size() < overflow_count) {
                     test_data.stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
-                    test_data.stats.s_tests += sieve_data->num_valid;
+
+                    // Mark m_inc tests as having been done, maybe print stats
+                    test_data.stats.batches += 1;
+                    test_data.stats.total_m += og_config.m_inc;
+                    test_data.stats.tested_m += sieve_data->num_valid;
+                    if (og_config.verbose >= 1) {
+                        test_data.maybe_print_stats();
+                    }
 
                     sieve_data->push_to_overflow_and_increment_M_range();
                     if (stop_queue) {
@@ -972,12 +979,6 @@ void run_testing_thread(const struct Config og_config) {
 
                     test_data.full_reset();
 
-                    // Mark m_inc tests as having been done, maybe print stats
-                    test_data.stats.s_gap_out_of_sieve_prev += og_config.m_inc;
-                    if (og_config.verbose >= 1) {
-                        // Occassionally print some stats
-                        test_data.maybe_print_stats();
-                    }
                 } else {
                     sieve_data->increment_X();
                 }

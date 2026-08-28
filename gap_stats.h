@@ -38,15 +38,14 @@ class StatsCounters {
 
         const high_resolution_clock::time_point s_start_t;
 
-        uint64_t  s_tests     = 0;
+        uint64_t    batches = 0;
+        uint64_t    total_m = 0;  // including m not coprime d
+        uint64_t    tested_m = 0; // m which were tested
 
         /* PRP counter */
         uint64_t    s_total_prp_tests = 0;
         uint64_t    s_total_primes = 0;
 
-        /* Number of times fallback or skips happened */
-        uint64_t    s_skips_after_one_side = 0;
-        uint64_t    s_gap_out_of_sieve_prev = 0;
         uint64_t    s_gap_out_of_sieve_next = 0;
 
         /* Interval stats */
