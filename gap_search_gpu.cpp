@@ -48,7 +48,7 @@
 
 
 #define GPU_SIEVE
-#define GPU_VERIFY
+// #define GPU_VERIFY
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -438,6 +438,7 @@ void run_sieve_thread(void) {
                 const int64_t inv_K = _invert(base_r, prime);
                 assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
                 assert( (inv_K * base_r) % prime == 1 );
+
                 // Never sieve less than this.
                 if (prime < 100'000) {
                     p_and_neg_inverse_k_small.emplace_back((uint32_t) prime, prime - inv_K);
@@ -556,7 +557,7 @@ void run_sieve_thread(void) {
                 for(uint32_t c_i = 0; c_i < composites.size(); ) {
                     size_t copy = std::min(composites.size() - c_i, d_wheel.size());
                     for (uint32_t j = 0; j < copy; j ++) {
-                        composites[c_i + j] |= d_wheel[j];
+                        composites[c_i + j] = d_wheel[j];
                     }
                     c_i += copy;
                 }
@@ -671,7 +672,7 @@ void run_sieve_thread(void) {
 #endif   // defined(GPU_VERIFY) || !defined(GPU_SIEVE)
 
 #ifdef GPU_SIEVE
-            max_p_i++;
+            (void)max_p_i;
             uint8_t *gpu_composite = gpu_sieve.run(m_start, m_inc, X);
 #endif // GPU_SIEVE
 
@@ -682,18 +683,19 @@ void run_sieve_thread(void) {
                     num_cpu_composite += __builtin_popcount(c);
                 }
                 uint32_t num_gpu_composite = 0;
-                for (uint32_t m_i = 0; m_i < m_inc; m_i += 1) {
+                for (uint32_t m_i = 0; m_i < M_INC_HALF; m_i += 1) {
                     num_gpu_composite += gpu_composite[m_i];
                 }
 
                 uint32_t mismatches = 0;
                 for (uint32_t m_i = 1; m_i < m_inc; m_i += 2) {
-                    uint8_t cpu_bit = (composites[m_i >> 6] & (1 << ((m_i>>1) & 31))) > 0;
-                    bool mismatch = gpu_composite[m_i] != cpu_bit;
+                    uint32_t t = m_i >> 1;
+                    uint8_t cpu_bit = (composites[t >> 5] & (1 << (t & 31))) > 0;
+                    bool mismatch = gpu_composite[t] != cpu_bit;
                     mismatches += mismatch;
                     if (mismatch && mismatches < 10) {
                         printf("Mismatch at m=%lu (%u) | X=%lu | CPU: %u, GPU: %u\n",
-                                m_start + m_i, m_i, X, cpu_bit, gpu_composite[m_i]);
+                                m_start + m_i, m_i, X, cpu_bit, gpu_composite[m_i >> 1]);
                     }
                 }
                 if (mismatches) {
@@ -749,7 +751,7 @@ void run_sieve_thread(void) {
                     //assert(m_i < m_inc);
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
 #ifdef GPU_SIEVE
-                    if (!gpu_composite[m_i])
+                    if (!gpu_composite[m_i >> 1])
 #else
                     uint32_t t = m_i >> 1;
                     if (!(composites[t >> 5] & 1 << (t & 31))) // && !(gpu_composite[m_i]))
