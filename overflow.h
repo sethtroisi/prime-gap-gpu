@@ -25,6 +25,10 @@
 #include "gap_stats.h"
 
 
+// Defined in gap_search_gpu.cpp
+extern std::atomic<bool> is_running;
+
+
 struct Overflow {
     uint64_t m;
 
@@ -70,10 +74,12 @@ class OverflowQueue {
         }
 
         Overflow wait_and_get() {
-            // TODO how to handle stop_queue and is_running
             while (true) {
                 size.wait(0);
                 lock();
+                if (!is_running) {
+                    return {0, 0, Overflow::Type::STOP_WORKER};
+                }
                 if (size > 0) {
                     assert( queue.size() == size.load() );
                     Overflow e = queue.front();
