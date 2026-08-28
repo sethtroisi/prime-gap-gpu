@@ -96,6 +96,7 @@ These are likely set to good values
         * Less dynamic flexibility
 
 ## TODO
+  * [ ] GPU Timing is missing 10-40%
   * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
   * [ ] Faster sieving
     * [ ] Tune 995'000 constant

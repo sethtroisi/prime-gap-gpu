@@ -15,6 +15,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <experimental/propagate_const>
 
 #include <gmp.h>
 
@@ -23,10 +25,23 @@
 extern const size_t GPU_BATCHES;
 extern const size_t GPU_BATCH_SIZE;
 
-// TODO can GPUBatch move here to help gpu_benchmark.cu?
+// Could can GPUBatch move here to help gpu_benchmark.cu?
 
-// TODO experimental
-void one_shot_batch(GPUBatch& batch);
+class GPURunner
+{
+    public:
+        GPURunner();
+        ~GPURunner();
+
+        void run(GPUBatch& batch);
+
+    private:
+        class GPURunnerImpl;
+        // PImpl
+        std::experimental::propagate_const<
+            std::unique_ptr<GPURunnerImpl>> pImpl;
+};
+
 
 void run_gpu_thread(int runner_num, int verbose,
                     TestData &test_data, GPUBatch& batch,

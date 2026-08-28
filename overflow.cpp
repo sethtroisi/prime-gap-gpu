@@ -473,6 +473,7 @@ void push_to_overflow_batch(
 
 static
 uint32_t run_overflow_batch(
+        GPURunner &runner,
         OverflowBatch &overflow_batch,
         const float MIN_GAP_TO_CONTINUE,
         const float MIN_MERIT, const float K_log, const uint32_t P, const uint32_t D,
@@ -491,7 +492,7 @@ uint32_t run_overflow_batch(
 
     // Run gpu_batch on GPU.
     auto s_start_t = high_resolution_clock::now();
-    one_shot_batch( gpu_batch );
+    runner.run( gpu_batch );
     stats.d_next_prime_gpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
 
     // Process results.
@@ -603,7 +604,8 @@ void run_cpu_overflow_worker(const int thread_index,
 
     std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
-    OverflowBatch overflow_batch;
+    GPURunner runner{};
+    OverflowBatch overflow_batch{};
     vector<uint8_t> composite_tmp;
 
     while (is_running) {
@@ -699,6 +701,7 @@ void run_cpu_overflow_worker(const int thread_index,
             if (overflow_batch.added == overflow_batch.N) {
                 for (size_t i = 0; i < 10; i++) {
                     auto found = run_overflow_batch(
+                            runner,
                             overflow_batch,
                             MIN_GAP_TO_CONTINUE, MIN_MERIT,
                             K_log, P, D,

@@ -825,7 +825,6 @@ void SieveData::push_to_overflow_and_increment_M_range() {
     if (1) { // Used when benchmarking sieve
         overflow.lock();
         for (uint32_t m_i : active_m_i) {
-            // TODO only hold lock once
             overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);
         }
         // Safe because I hold overflow.lock()

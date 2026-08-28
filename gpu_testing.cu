@@ -103,6 +103,7 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 /********** BENCHMARKING ***********/
 
+typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> gpu_params;
 
 
 uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
@@ -202,34 +203,38 @@ inline void fill_batch(
     }
 }
 
+class GPURunner::GPURunnerImpl {
+    public:
+        GPURunnerImpl() {}
+        ~GPURunnerImpl() = default;
 
-/**
- * TODO I want overflow to own runner without needing cuda compilation
- * Is there a forward declaration or point to implementation?
- */
-#ifdef GPU_TESTING
-typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-test_runner_t<params> runner(GPU_BATCH_SIZE);
-#endif // GPU_TESTING
-
-
-void one_shot_batch(GPUBatch& batch) {
-#ifdef GPU_TESTING
-
-    // run batch on gpu and wait for results to be set
-    runner.run_test(batch.i, batch.z, batch.result);
-
-#else
-
-    // Return true for 1/10 results (helps not overflow sieve)
-    for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
-        if (batch.active[gpu_i]) {
-            batch.result[gpu_i] = (std::rand() % 10) == 1;
+        void run(GPUBatch& batch) {
+            #ifdef GPU_TESTING
+                // run batch on gpu and wait for results to be set
+                runner.run_test(batch.i, batch.z, batch.result);
+            #else
+                // Return true for 1/10 results (helps not overflow sieve)
+                for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
+                    if (batch.active[gpu_i]) {
+                        batch.result[gpu_i] = (std::rand() % 10) == 1;
+                    }
+                }
+            #endif // GPU_TESTING
         }
-    }
-
+    private:
+#ifdef GPU_TESTING
+        test_runner_t<gpu_params> runner{GPU_BATCH_SIZE};
 #endif // GPU_TESTING
+};
+
+void GPURunner::run(GPUBatch& batch) {
+    // Forward the call
+    pImpl->run(batch);
 }
+
+GPURunner::GPURunner() : pImpl(std::make_unique<GPURunnerImpl>()) {}
+GPURunner::~GPURunner() = default;
+
 
 /**
  * Starts a CPU thread that handles launching CUDA kernels for primality tests.
@@ -251,8 +256,7 @@ void run_gpu_thread(int runner_num, int verbose,
         mpz_init(t);
 
 #ifdef GPU_TESTING
-        typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
-        test_runner_t<params> runner(GPU_BATCH_SIZE);
+        test_runner_t<gpu_params> runner{GPU_BATCH_SIZE};
 #endif // GPU_TESTING
 
         size_t processed_batches = 0;
