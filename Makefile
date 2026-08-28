@@ -13,7 +13,7 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o gpu_testing.o overflow.o
+OBJS	= gap_common.o gpu_testing.o overflow.o sieve_small.o
 OUT	= gap_search_gpu
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native

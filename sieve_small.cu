@@ -460,14 +460,14 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
 
         for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
             const auto s = host_thread_stats + (stats_per_thread * ti);
-            auto t0 = s[0];
-            auto t1 = s[1];
-            auto small_factors = s[2];
+            //auto t0 = s[0];
+            //auto t1 = s[1];
+            //auto small_factors = s[2];
             auto verify = s[3];
-            if (ti % 173 == 0) {
-                printf("\tt%-5lu | t0 offset = %-13ld | t1-t0 = %-12ld | factors: %ld\n",
-                        ti, t0 - first_t0, t1 - t0, small_factors);
-            }
+            //if (ti % 173 == 0) {
+            //    printf("\tt%-5lu | t0 offset = %-13ld | t1-t0 = %-12ld | factors: %ld\n",
+            //            ti, t0 - first_t0, t1 - t0, small_factors);
+            //}
             assert(verify == ti);
         }
     }

@@ -21,7 +21,7 @@
 
 // TODO figure out what to set here
 #define GRID_SIZE 64
-#define BLOCK_SIZE 32 // Number of threads
+#define BLOCK_SIZE 128 // Number of threads
 
 class GPUSieve {
     public:
