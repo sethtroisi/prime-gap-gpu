@@ -51,7 +51,7 @@ const int BITS = GPU_BITS;
 const int BITS = 1024;
 #endif
 
-const int WINDOW_BITS = (BITS <= 1024) ? 5 : 6;
+const int WINDOW_BITS = 4 + (BITS > 256) + (BITS > 512);
 const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
 
 #endif // GPU_TESTING
@@ -67,40 +67,11 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
 /********** BENCHMARKING ***********/
-// 701#
-// GPU    - BATCH TPI -> PRP/second
-// 1080Ti - 2K,   8 -> 250K
-// 1080Ti - 4K,   8 -> 266K
-// 1080Ti - 8K,   8 -> 282K
-// 1080Ti - 16K,  8 ->
-
-// Remember to set sm_80
-// A100   - 4K,   8 -> 930K
-// A100   - 8K,   8 -> 1050K
-// A100   - 16K,  8 -> 1085K!
-
-// 347# as high as 180K m/sec
-// 1080Ti - 8K, 4  -> 1680K
-// 1080Ti - 4K, 4  -> 1890K!
-// 1080Ti - 2K, 4  -> 1330K
-
-// A100   - 8K,   4 ->
-// A100   - 16K,  4 -> 2210K (40% utilization)
-// A100   - 32K,  4 ->
-
-// 257# as high as 340K m/sec!
-// 1080Ti - 2K,  4 -> 2500K!
-// 1080Ti - 4K,  4 -> 3300K!
-// 1080Ti - 8K,  4 -> 3060K!
-
-// A100   - 16K, 4 ->
-
-// AUG 2026 BENCHMARKING
-// 151#
-// 1080Ti - 4K  -> 8.22M/sec
-// 1080Ti - 8K  -> 8.36M/sec
-// 1080Ti - 16K -> 8.36M/sec
-
+// Use `make BITS=X gpu_benchmark`
+// 1080Ti 347# ???
+// 1080Ti 151# ???
+// 4070Ti Super 347# 43M PRP/second
+// 4070Ti Super 151# 10.8M PRP/second
 /********** BENCHMARKING ***********/
 
 typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> gpu_params;

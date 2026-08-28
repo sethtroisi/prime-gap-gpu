@@ -72,6 +72,7 @@ These are likely set to good values
 
    * `OPEN_SIEVES` 3-6 is probably great balance of enough unknown count smoothing while minimizing memory usage.
    * `GPU_BATCHES` 2-3, 3 is probably better.
+   * `WINDOW_BITS` 4-5, 4 for 256, 5 for 512
 
 ## Upgrades
 
@@ -98,7 +99,6 @@ These are likely set to good values
 ## TODO
   * [ ] Reduce the 10% of the time sieve is late
   * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
-  * [ ] Test `WINDOW_BITS=4 for BITS=256'
   * [ ] Faster sieving
     * [ ] Tune 995'000 constant
     * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial

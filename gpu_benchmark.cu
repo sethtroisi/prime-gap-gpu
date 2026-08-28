@@ -39,7 +39,7 @@ const int BITS = GPU_BITS;
 const int BITS = 1024;
 #endif
 
-const int WINDOW_BITS = (BITS <= 1024) ? 5 : 6;
+const int WINDOW_BITS = 4 + (BITS > 256) + (BITS > 512);
 const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
 const size_t GPU_BATCHES = 3;
 const size_t GPU_BATCH_SIZE = 8 * 1024;
@@ -108,6 +108,13 @@ void run_benchmark_thread(const struct Config og_config) {
         double d2 = duration<double>(t2 - t1).count();
         stats.d_run += d1;
         stats.d_results += d2;
+
+        if ((stats.batches_run & 0xF) == 0) {
+            merge_mtx.lock();
+            global_stats.merge(stats);
+            merge_mtx.unlock();
+            stats.reset();
+        }
     }
 
     {
@@ -137,6 +144,7 @@ int main(int argc, char* argv[]) {
     printf("PRP/BATCH=%ld\n", GPU_BATCH_SIZE);
     printf("THREADS/PRP=%d\n", THREADS_PER_INSTANCE);
     printf("GPU_BATCHES=%lu\n", GPU_BATCHES);
+    setlocale(LC_NUMERIC, "");
 
     is_running = true;
 
@@ -154,7 +162,12 @@ int main(int argc, char* argv[]) {
     }
 
     while (is_running) {
-        usleep(10'000); // 10ms;
+        usleep(2'000'000); // 2seconds;
+        double total_t = duration<double>(high_resolution_clock::now() - start_t).count();
+        printf("\ttotal tests     : %'lu (%.1f%% prime) (%'u/sec)\n",
+                global_stats.total_prp_tests,
+                100.0 * global_stats.total_primes / global_stats.total_prp_tests,
+                (uint32_t) (global_stats.total_prp_tests / total_t));
     }
 
     for (auto &thread : threads) {
