@@ -50,4 +50,4 @@ gpu_benchmark: gpu_benchmark.cu gap_common.o
 .PHONY: all clean
 
 clean:
-	rm -f $(OUT) *.o
+	rm -f $(OUT) *.o gpu_benchmark

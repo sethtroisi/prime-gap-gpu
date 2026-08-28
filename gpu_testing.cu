@@ -65,7 +65,6 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
 
-
 /********** BENCHMARKING ***********/
 // Use `make BITS=X gpu_benchmark`
 // 1080Ti 347# ???
@@ -74,7 +73,9 @@ const size_t GPU_BATCH_SIZE = 8 * 1024;
 // 4070Ti Super 151# 10.8M PRP/second
 /********** BENCHMARKING ***********/
 
+#ifdef GPU_TESTING
 typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> gpu_params;
+#endif // GPU_TESTING
 
 
 uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {

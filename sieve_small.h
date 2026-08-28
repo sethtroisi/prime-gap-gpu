@@ -14,19 +14,14 @@
 
 #pragma once
 
-#include <bitset>
-#include <cstdio>
-#include <memory>
-#include <utility>
-#include <vector>
+#include <cstdint>
+#include <cuda_runtime.h>
 
 #include "gap_common.h"
 
 // TODO figure out what to set here
 #define GRID_SIZE 64
 #define BLOCK_SIZE 32 // Number of threads
-
-using std::vector;
 
 class GPUSieve {
     public:

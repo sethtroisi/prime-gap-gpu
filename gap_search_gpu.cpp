@@ -103,8 +103,8 @@ int main(int argc, char* argv[]) {
             __GNU_MP_VERSION, __GNU_MP_VERSION_MINOR, __GNU_MP_VERSION_PATCHLEVEL);
     }
 
-    if (100'000 < config.max_prime && config.max_prime > 4'000'000'000) {
-        printf("\tmax_prime(%'ld) should be between 100K and 4B\n", config.max_prime);
+    if (100'000 < config.max_prime && config.max_prime > 1'000'000'000) {
+        printf("\tmax_prime(%'ld) should be between 100K and 1B\n", config.max_prime);
     }
 
     setlocale(LC_NUMERIC, "");
@@ -564,7 +564,7 @@ void run_sieve_thread(void) {
             uint64_t prime = 0;
             if (1) {
                 // Break the larger range up into smaller ranges that are more likely to fit in L2 (2MB cache)
-                uint64_t intervals = M_INC_HALF / 995'000;
+                uint64_t intervals = M_INC_HALF / 995'000 + 1;
                 //printf("Breaking up into %lu intervals of %lu each\n", intervals, m_inc / intervals);
                 for (size_t interval = 0; interval < intervals; interval++) {
                     // indexed into [0, m_inc]
@@ -660,6 +660,7 @@ void run_sieve_thread(void) {
                     // This requires K odd and m_start even (both checked above)
                     // See 1ba32111 for more details.
                     mi_0 += (mi_0 & 1) ? 0 : prime;
+                    mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
                     for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
                         composites[t >> 5] |= 1 << (t & 31);

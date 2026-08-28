@@ -49,12 +49,15 @@ using std::vector;
 using namespace std::chrono;
 
 
-// BIT_IS_BIT means 8x less GPU memory, faster transfers but, slightly slower compute
-// A very small percentage of factors get lost.
+/**
+ *  BIT_IS_BIT
+ *      Pros: 8x less GPU memory, faster transfers
+ *      Cons: Read & Write on every access, a small percentage of factors get lost.
+ */
 //#define BIT_IS_BIT
 
 // support routines
-void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
+inline void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
   // check for cuda errors
 
   if(status!=cudaSuccess) {
@@ -194,9 +197,9 @@ __global__ void method2_medium_primes_kernal(
     uint32_t pi_0 = thread_idx;
     for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
     //for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
-        const uint32_t prime = primes[pi];
+        const uint64_t prime = primes[pi];
         //const uint32_t base_r = remainders[pi];
-        const int32_t neg_inv_K = neg_inv_Ks[pi];
+        const int64_t neg_inv_K = neg_inv_Ks[pi];
 
         // {
         //     // as large as prime^2

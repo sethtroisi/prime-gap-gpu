@@ -268,6 +268,7 @@ void sieve_interval_cpu(const uint64_t m,
 
     // only interested in even i
     assert(sieve_start % 2 == 0);
+    // otherwise m * neg_r < sieve_start
     assert(m > ofs.p_and_neg_r.back().first);
 
     // Otherwise I need to do something different here
