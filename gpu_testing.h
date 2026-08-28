@@ -89,6 +89,10 @@ class GPUBatch {
         GPUBatch(const GPUBatch&) = delete;
         GPUBatch& operator=(const GPUBatch&) = delete;
 
+        size_t capacity() const {
+            return elements;
+        }
+
         void lock()  {
             while (flag.exchange(1) == 1) {
                 flag.wait(1, std::memory_order_relaxed);

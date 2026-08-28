@@ -81,6 +81,7 @@ typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> gpu_params;
 uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
     test_data.lock();
     assert(batch.x == test_data.testing_x);
+    assert(batch.capacity() == GPU_BATCH_SIZE);
 
     uint32_t found = 0;
     uint32_t m_i = 0;
@@ -120,6 +121,7 @@ inline void fill_batch(
         GPUBatch& batch,
         const uint32_t x) {
     assert( batch.state == GPUBatch::EMPTY );
+    assert( batch.capacity() == GPU_BATCH_SIZE );
 
     // Grap some entries from each item in M
 
@@ -180,9 +182,9 @@ class GPURunner::GPURunnerImpl {
                 runner.run_test(batch.i, batch.z, batch.result);
             #else
                 // Return true for 1/10 results (helps not overflow sieve)
-                for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
-                    if (batch.active[gpu_i]) {
-                        batch.result[gpu_i] = (std::rand() % 10) == 1;
+                for (size_t i = 0; i < batch.i; i++) {
+                    if (batch.active[i]) {
+                        batch.result[i] = (std::rand() % 10) == 1;
                     }
                 }
             #endif // GPU_TESTING
