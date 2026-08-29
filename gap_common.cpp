@@ -374,6 +374,11 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
 
     // ----- Validation
 
+    if (config.m_start >= 3 && config.m_start % 2 == 1) {
+        cout << "Adjusting mstart to previous even." << endl;
+        config.m_start -= 1;
+    }
+
     if (config.m_start <= 0) {
         config.valid = 0;
         cout << "mstart must be greater than 0: " << config.m_start << endl;
