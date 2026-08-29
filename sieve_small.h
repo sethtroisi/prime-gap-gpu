@@ -15,13 +15,15 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <cuda_runtime.h>
 
 #include "gap_common.h"
 
-// TODO figure out what to set here
-#define GRID_SIZE 64
-#define BLOCK_SIZE 128 // Number of threads
+// Should be a multiple of SM (66 on 4070)
+#define GRID_SIZE (2*66)
+// number of threads, multiple of 32
+#define BLOCK_SIZE 64
 
 class GPUSieve {
     public:
@@ -41,33 +43,36 @@ class GPUSieve {
         uint64_t number_sieves = 0;
         double   total_sieve_time = 0;
 
-        /**** GPU POINTERS ****/
-        // GPU stats
-        const size_t   stats_per_thread = 4;
-        const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
-        int64_t  *host_thread_stats;
-        int64_t  *thread_stats;
-
-        // Cache stuff
-
-        //char     *is_coprime2310;
-
-        // Cached prime stuff
         uint32_t num_primes;
         uint32_t num_small_primes;
+
+        mpz_t K;
+        uint32_t D;
+        uint32_t K_mod_d;
+        size_t d_wheel_bytes;
+
+        const size_t   stats_per_thread = 4;
+        const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
+        size_t host_composite_bytes;
+
+        /******** GPU POINTERS ********/
+        /******************************/
+        // GPU stats
+        int64_t  *thread_stats;
+
+        // Both of these are `num_primes` long
         uint32_t *primes;
-        // Remainders isn't actually used!
-        // uint32_t *remainders; // r = K mod p
         int32_t *neg_inv_Ks;  // r^1 mod p
 
         size_t composite_bytes;
         uint8_t *composite;
-        /**** END GPU POINTERS ****/
+        uint8_t *d_wheel;
+        /******************************/
+        /******** GPU POINTERS ********/
 
         // Host side
-        size_t host_composite_bytes;
         uint8_t* host_composite;
-
-        mpz_t K;
-        //uint32_t K_mod2310;
+        int64_t  *host_thread_stats;
+        vector<std::pair<uint32_t, uint32_t>> d_neg_inv_K;
+        vector<uint8_t> host_wheel;
 };

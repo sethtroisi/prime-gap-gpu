@@ -34,7 +34,7 @@
 #include "overflow.h"
 
 // Comment out to use fake PRP test (for benchmarking)
-//#define GPU_TESTING
+#define GPU_TESTING
 
 #ifdef GPU_TESTING
 #include "miller_rabin.h"

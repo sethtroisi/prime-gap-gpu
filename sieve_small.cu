@@ -82,6 +82,41 @@ inline void cuda_check(cudaError_t status, const char *action=NULL, const char *
 //     return n - q * 2310;
 // }
 
+
+/** Called by host executed on device. */
+__global__ void wheel_kernel(
+    const uint32_t d_wheel_size,
+    const uint8_t *d_wheel,
+    const uint64_t global_M_INC_HALF,
+    uint8_t *composite
+) {
+    uint64_t t0 = clock64();
+
+    // Indexing is hard for me
+    // blockIdx.x / gridDim.x
+    // threadIdx.x / blockDim.x
+    uint32_t threads = gridDim.x * blockDim.x;
+    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // Handle tiling some portion of d_wheel into composite
+
+    uint32_t copies = (global_M_INC_HALF-1) / d_wheel_size + 1;
+
+    assert(threads > copies);
+
+    if (thread_idx >= copies)
+        return;
+
+    uint32_t start_i = thread_idx * d_wheel_size;
+    uint32_t c_size = global_M_INC_HALF - start_i;
+
+    uint32_t bytes = d_wheel_size < c_size ? d_wheel_size : c_size;
+    for (uint32_t j = 0; j < bytes;) {
+        composite[start_i++] = d_wheel[j++];
+    }
+
+    uint64_t t1 = clock64();
+}
+
 /** Called by host executed on device. */
 __global__ void method2_small_primes_kernal(
     int64_t *thread_stats,
@@ -305,11 +340,8 @@ GPUSieve::GPUSieve(const struct Config& config) {
             assert( prime == 3 );
             num_primes = 0;
             for (; prime <= config.max_prime; prime = iter.next_prime()) {
-                // TODO figure out better wheel strategy
-                //if (prime <= config.p && (config.d % prime > 0)) {
-                if (prime <= config.p) {
+                if (prime <= config.p && (config.d % prime > 0))
                     continue;
-                }
 
                 const uint64_t base_r = mpz_fdiv_ui(K, prime);
                 const int32_t inv_K = invert(base_r, prime);
@@ -319,6 +351,12 @@ GPUSieve::GPUSieve(const struct Config& config) {
                 assert( (inv_K * base_r) % prime == 1 );
                 const int64_t neg_inv_K = (prime - inv_K) % prime;
                 assert( (neg_inv_K * base_r) % prime == (prime-1) );
+
+                if (prime <= config.p) {
+                    assert( config.d % prime == 0 );
+                    d_neg_inv_K.emplace_back(prime, neg_inv_K);
+                    continue;
+                }
 
                 host_primes.push_back(prime);
                 // host_remainders.push_back(base_r);
@@ -355,6 +393,18 @@ GPUSieve::GPUSieve(const struct Config& config) {
 
         host_composite_bytes = composite_bytes;
         cudaMallocHost((void**) &host_composite, host_composite_bytes);
+
+        {
+            D = config.d;
+            K_mod_d = mpz_fdiv_ui(K, D);
+            d_wheel_bytes = 3 * (4*D);
+            if (GRID_SIZE * d_wheel_bytes > config.m_inc) {
+                printf("\td_wheel_bits only tiles a few times!\n");
+            }
+            CUDA_CHECK(cudaMallocAsync(&d_wheel, d_wheel_bytes, runner));
+
+            host_wheel.resize(d_wheel_bytes, 0);
+        }
 
         if (config.verbose >= 1) {
             printf("\tGPUSieve(): malloced: primes: 2x %'d  composite: %lu MB + %lu MB\n",
@@ -395,11 +445,46 @@ uint8_t* GPUSieve::run(
         const uint64_t X, const uint32_t max_p_i) {
 
     assert(m_inc % 2 == 0);
-    uint32_t kernel1_ms, kernel2_ms, kernel_ms;
+    double wheel_d, small_d, large_d, total_d;
 
     { // Run GPU Sieve!
         auto T0 = high_resolution_clock::now();
-        CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
+
+        std::fill(host_wheel.begin(), host_wheel.end(), 0);
+        for( const auto& [d, neg_inv_K] : this->d_neg_inv_K) {
+            if (d == 2) continue;
+
+            // m % d != 0, K % d != 0, if X % d == 0, (m*K + X) % d != 0
+            // Skipping these doesn't save any time and makes verification harder.
+            //if (X % d == 0) continue;
+
+            uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
+            mi_0 += (mi_0 & 1) ? 0 : d;
+            assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
+
+            for( uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d ) {
+                host_wheel[i] = 1;
+            }
+        }
+
+        CUDA_CHECK(cudaMemcpyAsync(d_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
+        uint32_t needed_blocks = ((m_inc/2 - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
+        if (number_sieves == 0 && verbose >= 1) {
+            printf("\twheel %lu/%lu\n", std::count(host_wheel.begin(), host_wheel.end(), 1), d_wheel_bytes);
+            printf("\tLaunching wheel_kernel<<<%u,%u>>>\n", needed_blocks, BLOCK_SIZE);
+        }
+
+        wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
+            this->d_wheel_bytes,
+            this->d_wheel,
+            m_inc / 2,
+            this->composite
+        );
+
+        auto T1 = high_resolution_clock::now();
+
+        // Not needed if wheel is done
+        //CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
         // Should be a small multiple of GRID_SIZE
         num_small_primes = 4 * GRID_SIZE;
@@ -414,7 +499,7 @@ uint8_t* GPUSieve::run(
         );
 
         cudaStreamSynchronize(runner);
-        auto T1 = high_resolution_clock::now();
+        auto T2 = high_resolution_clock::now();
 
         uint32_t last_p_i = std::min(this->num_primes, max_p_i);
         if (last_p_i > this->num_small_primes) {
@@ -431,13 +516,14 @@ uint8_t* GPUSieve::run(
         }
 
         cudaStreamSynchronize(runner);
-        auto T2 = high_resolution_clock::now();
+        auto T3 = high_resolution_clock::now();
 
-        kernel1_ms = duration_cast<milliseconds>(T1 - T0).count();
-        kernel2_ms = duration_cast<milliseconds>(T2 - T1).count();
-        kernel_ms = duration_cast<milliseconds>(T2 - T0).count();
+        wheel_d = duration<double>(T1 - T0).count();
+        small_d = duration<double>(T2 - T1).count();
+        large_d = duration<double>(T3 - T2).count();
+        total_d = duration<double>(T3 - T0).count();
         number_sieves += 1;
-        total_sieve_time += duration<double>(T2 - T0).count();
+        total_sieve_time += total_d;
     }
 
     if (0) { // Read thread stats
@@ -470,7 +556,7 @@ uint8_t* GPUSieve::run(
                    cudaMemcpyDeviceToHost, runner));
         cudaStreamSynchronize(runner);
 
-        if (verbose + (X == 2) >= 3) {
+        if (verbose + (X <= 2) >= 2) {
 #ifdef BIT_IS_BIT
             uint32_t num_composite = 0;
             for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
@@ -481,11 +567,12 @@ uint8_t* GPUSieve::run(
 #endif  // BIT_IS_BIT
 
             auto T1 = high_resolution_clock::now();
-            auto bitfiddling_ms = duration_cast<milliseconds>(T1 - T0).count();
-            printf("\tGPU sieve %lu ms | kernels: %u + %u ms "
-                    "| copy-back: %lu ms | %u/%lu composite\n",
-                    kernel_ms + bitfiddling_ms, kernel1_ms, kernel2_ms,
-                    bitfiddling_ms, num_composite, m_inc/2);
+            auto end_d = duration<double>(T1 - T0).count();
+            total_d += end_d;
+            printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, copy-back: %.4f  "
+                    "| %u/%lu composite\n",
+                    total_d, wheel_d, small_d, large_d, end_d,
+                    num_composite, m_inc/2);
         }
     }
 

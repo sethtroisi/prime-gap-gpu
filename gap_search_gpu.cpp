@@ -47,8 +47,8 @@
 #include "overflow.h"
 
 
-//#define GPU_SIEVE
-//#define GPU_VERIFY
+#define GPU_SIEVE
+// #define GPU_VERIFY
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -512,6 +512,8 @@ void run_sieve_thread(void) {
                 // lower max_p_i if not many sieves ready
                 if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
                     max_p_i -= max_p_i / 10;
+                    if (max_p_i < 10000)
+                        max_p_i = 10000;
                 }
             }
 
@@ -531,6 +533,10 @@ void run_sieve_thread(void) {
             assert (X % 2 == 0);
 
             assert(m_start % 2 == 0); // or fix the code
+
+            uint64_t prime = 0;
+
+#if !defined(GPU_SIEVE) || defined(GPU_VERIFY)
             // Don't need fill because wheel sets (not or's)
             //std::fill(composites.begin(), composites.end(), 0);
 
@@ -545,7 +551,10 @@ void run_sieve_thread(void) {
                     if (d == 2) continue;
 
                     // m % d != 0, K % d != 0, if X % d == 0, (m*K + X) % d != 0
-                    if (X % d == 0) continue;
+                    // Skipping these doesn't save any time and makes verification harder.
+                    //if (X % d == 0) continue;
+
+                    // Need m_start % d to not overflow.
 
                     uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
                     mi_0 += (mi_0 & 1) ? 0 : d;
@@ -568,9 +577,6 @@ void run_sieve_thread(void) {
                 wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
             }
 
-            uint64_t prime = 0;
-
-#if !defined(GPU_SIEVE) || defined(GPU_VERIFY)
             if (1) {
                 // Break the larger range up into smaller ranges that are more likely to fit in L2 (2MB cache)
                 uint64_t intervals = M_INC_HALF / 995'000 + 1;
@@ -676,10 +682,10 @@ void run_sieve_thread(void) {
 #endif  // !defined(GPU_SIEVE) || defined(GPU_VERIFY)
 
 #ifdef GPU_SIEVE
-            (void)max_p_i;
             // TODO get exact prime counts to agree.
             uint8_t *gpu_composite = gpu_sieve.run(
                     m_start, m_inc, X, max_p_i + p_and_neg_inverse_k_small.size());
+            prime = p_and_neg_inverse_k[max_p_i-1].first;
 #endif // GPU_SIEVE
 
 #ifdef GPU_VERIFY
