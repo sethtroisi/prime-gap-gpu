@@ -48,7 +48,9 @@
 
 
 #define GPU_SIEVE
-// #define GPU_VERIFY
+//#define GPU_VERIFY
+
+#define CPU_SIEVE (!defined(GPU_SIEVE) || defined(GPU_VERIFY))
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -536,7 +538,7 @@ void run_sieve_thread(void) {
 
             uint64_t prime = 0;
 
-#if !defined(GPU_SIEVE) || defined(GPU_VERIFY)
+#if CPU_SIEVE
             // Don't need fill because wheel sets (not or's)
             //std::fill(composites.begin(), composites.end(), 0);
 
@@ -679,11 +681,11 @@ void run_sieve_thread(void) {
                     }
                 }
             }
-#endif  // !defined(GPU_SIEVE) || defined(GPU_VERIFY)
+#endif  // CPU_SIEVE
 
 #ifdef GPU_SIEVE
             // TODO get exact prime counts to agree.
-            uint8_t *gpu_composite = gpu_sieve.run(
+            uint8_t *gpu_composites = gpu_sieve.run(
                     m_start, m_inc, X, max_p_i + p_and_neg_inverse_k_small.size());
             prime = p_and_neg_inverse_k[max_p_i-1].first;
 #endif // GPU_SIEVE
@@ -695,25 +697,24 @@ void run_sieve_thread(void) {
                     num_cpu_composite += __builtin_popcount(c);
                 }
                 uint32_t num_gpu_composite = 0;
-                for (uint32_t m_i = 0; m_i < M_INC_HALF; m_i += 1) {
-                    num_gpu_composite += gpu_composite[m_i];
+                for (uint32_t m_i = 0; m_i < (M_INC_HALF+7)/8; m_i += 1) {
+                    num_gpu_composite += __builtin_popcount(gpu_composites[m_i]);
                 }
 
                 uint32_t mismatches = 0;
                 for (uint32_t m_i = 1; m_i < m_inc; m_i += 2) {
                     uint32_t t = m_i >> 1;
-                    uint8_t cpu_bit = (composites[t >> 5] & (1 << (t & 31))) > 0;
-                    bool mismatch = gpu_composite[t] != cpu_bit;
+                    uint8_t cpu_bit = (    composites[t >> 5] & (1 << (t & 31))) > 0;
+                    uint8_t gpu_bit = (gpu_composites[t >> 3] & (1 << (t & 7))) > 0;
+                    bool mismatch = gpu_bit != cpu_bit;
                     mismatches += mismatch;
                     if (mismatch && mismatches < 10) {
                         printf("Mismatch at m=%lu (%u) | X=%lu | CPU: %u, GPU: %u\n",
-                                m_start + m_i, m_i, X, cpu_bit, gpu_composite[m_i >> 1]);
+                                m_start + m_i, m_i, X, cpu_bit, gpu_bit);
                     }
                 }
-                if (mismatches) {
-                    printf("GPU/CPU sieve mismatches: %u | composites CPU: %u GPU: %u\n",
-                            mismatches, num_cpu_composite, num_gpu_composite);
-                }
+                printf("GPU/CPU sieve mismatches: %u | composites CPU: %u GPU: %u\n",
+                        mismatches, num_cpu_composite, num_gpu_composite);
                 if (mismatches) {
                     is_running = false;
                     exit(0);
@@ -764,9 +765,9 @@ void run_sieve_thread(void) {
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
                     uint32_t t = m_i >> 1;
 #ifdef GPU_SIEVE
-                    if (!gpu_composite[t])
+                    if (!(gpu_composites[t >> 3] & (1 << (t & 7))))
 #else
-                    if (!(composites[t >> 5] & (1 << (t & 31))))
+                    if (!(    composites[t >> 5] & (1 << (t & 31))))
 #endif  // GPU_SIEVE
                         tests->push_back(m_i);
                 }
@@ -793,19 +794,20 @@ void run_sieve_thread(void) {
             }
 
             if ((config.verbose + (X <= 2) + (config.m_start <= 1'000'000)) >= 3) {
-                printf("\tCPU Sieve @X=%lu with %u/%u (%.0f%%) unknown/active last prime=%lu"
+#if CPU_SIEVE
+                printf("\tSieve @X=%lu with %u/%u (%.0f%%) unknown/active last prime=%lu"
                        " took %.3f (wheel: %.3f) + %.3f seconds\n",
                        X, unknowns_size, active_size,
                        100.0 * unknowns_size / active_size,
                        prime,
                        sieve_duration_t, wheel_duration_t, finalize_duration_t);
-                if (0) {
-                    printf("\tOpen sieves: ");
-                    for (auto& t : sieve_data->next_sieves) {
-                        printf("%u=%lu,", t.first, t.second.size());
-                    }
-                    printf("\n");
-                }
+#else
+                printf("\tSieve @X=%lu with %u/%u (%.0f%%) unknown/active"
+                       " took %.3f + %.3f seconds\n",
+                       X, unknowns_size, active_size,
+                       100.0 * unknowns_size / active_size,
+                       sieve_duration_t, finalize_duration_t);
+#endif  // CPU_SIEVE
             }
 
             lock.unlock();
@@ -860,7 +862,7 @@ void SieveData::push_to_overflow_and_increment_M_range() {
         printf("\n");
     }
 
-    if (0) { // Used when benchmarking sieve
+    if (1) { // Disable when benchmarking sieve
         overflow.lock();
         for (uint32_t m_i : active_m_i) {
             overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);

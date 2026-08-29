@@ -66,6 +66,8 @@ class GPUSieve {
 
         size_t composite_bytes;
         uint8_t *composite;
+        uint8_t *composite_compressed;
+
         uint8_t *d_wheel;
         /******************************/
         /******** GPU POINTERS ********/

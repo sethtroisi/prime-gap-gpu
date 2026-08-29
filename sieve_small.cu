@@ -48,13 +48,7 @@ using std::pair;
 using std::vector;
 using namespace std::chrono;
 
-
-/**
- *  BIT_IS_BIT
- *      Pros: 8x less GPU memory, faster transfers
- *      Cons: Read & Write on every access (vs just write), a small percentage of factors get lost.
- */
-//#define BIT_IS_BIT
+const uint32_t COMPRESS_BYTES_PER_THREAD = 256;
 
 // support routines
 inline void cuda_check(cudaError_t status, const char *action=NULL, const char *file=NULL, int32_t line=0) {
@@ -87,35 +81,70 @@ inline void cuda_check(cudaError_t status, const char *action=NULL, const char *
 __global__ void wheel_kernel(
     const uint32_t d_wheel_size,
     const uint8_t *d_wheel,
-    const uint64_t global_M_INC_HALF,
+    const uint64_t composite_size,
     uint8_t *composite
 ) {
-    uint64_t t0 = clock64();
-
-    // Indexing is hard for me
-    // blockIdx.x / gridDim.x
-    // threadIdx.x / blockDim.x
     uint32_t threads = gridDim.x * blockDim.x;
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // Handle tiling some portion of d_wheel into composite
 
-    uint32_t copies = (global_M_INC_HALF-1) / d_wheel_size + 1;
-
+    uint32_t copies = (composite_size-1) / d_wheel_size + 1;
     assert(threads > copies);
-
     if (thread_idx >= copies)
         return;
 
     uint32_t start_i = thread_idx * d_wheel_size;
-    uint32_t c_size = global_M_INC_HALF - start_i;
+    uint32_t c_size = composite_size - start_i;
 
     uint32_t bytes = d_wheel_size < c_size ? d_wheel_size : c_size;
     for (uint32_t j = 0; j < bytes;) {
         composite[start_i++] = d_wheel[j++];
     }
-
-    uint64_t t1 = clock64();
 }
+
+/** Called by host executed on device. */
+__global__ void compress_kernel(
+    const uint64_t composite_size,
+    const uint8_t *composite,
+    uint8_t *result
+) {
+    uint32_t threads = gridDim.x * blockDim.x;
+    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    const uint32_t size_per = COMPRESS_BYTES_PER_THREAD;
+    assert( size_per % 8 == 0 );
+    assert( composite_size % 8 == 0 ); // avoids tail loop from loop unrolling.
+
+    uint32_t copies = (composite_size-1) / size_per + 1;
+    assert(threads > copies);
+    if (thread_idx >= copies)
+        return;
+
+    uint32_t start_i = thread_idx * size_per;
+    uint32_t c_size = composite_size - start_i;
+
+    uint32_t bytes = size_per < c_size ? size_per : c_size;
+    assert( bytes % 8 == 0);
+
+    uint32_t c_i = start_i;
+
+    for (uint32_t j = 0; j < bytes; j += 8) {
+        // 8x loop unrolled
+        uint8_t t = (
+            composite[c_i]
+            | (composite[c_i+1] << 1)
+            | (composite[c_i+2] << 2)
+            | (composite[c_i+3] << 3)
+            | (composite[c_i+4] << 4)
+            | (composite[c_i+5] << 5)
+            | (composite[c_i+6] << 6)
+            | (composite[c_i+7] << 7)
+        );
+
+        result[c_i >> 3] = t;
+        c_i += 8;
+    }
+}
+
 
 /** Called by host executed on device. */
 __global__ void method2_small_primes_kernal(
@@ -133,8 +162,6 @@ __global__ void method2_small_primes_kernal(
     // uint32_t *remainders, // r = K mod p
     int32_t *neg_inv_Ks      // r^-1 mod p
 ) {
-    uint64_t t0 = clock64();
-
     // Indexing is hard for me
     // blockIdx.x / gridDim.x
     // threadIdx.x / blockDim.x
@@ -155,6 +182,8 @@ __global__ void method2_small_primes_kernal(
     uint64_t thread_M_start = global_M_start + (thread_offset << 1);
 
     // See gap_search_gpu.cpp for some explination of magic.
+
+    // TODO make sure every thread in the thread block is handling a similiar sized prime.
 
     for (uint32_t pi = blockIdx.x; pi < num_primes; pi += GRID_SIZE) {
         const uint32_t prime = primes[pi];
@@ -179,16 +208,9 @@ __global__ void method2_small_primes_kernal(
             // After initial value this increases by (shift * K_mod2310) % 2310
             //uint32_t n_mod2310 = ((K_mod2310 * m_mod2310) + X) % 2310;
             //uint32_t n_mod2310 = mod2310((K_mod2310 * m_mod2310) + X);
-
-#ifdef BIT_IS_BIT
-            composite[t >> 3] |= 1 << (t & 7);
-#else
             composite[t] = true;
-#endif  // BIT_IS_BIT
         }
     }
-
-    uint64_t t1 = clock64();
 }
 
 /** Called by host executed on device. */
@@ -258,11 +280,7 @@ __global__ void method2_medium_primes_kernal(
             mi_0 >>= 1;
 
             for (uint32_t t = mi_0;  t < M_INC_HALF; t += prime) {
-#ifdef BIT_IS_BIT
-                composite[t >> 3] |= 1 << (t & 7);
-#else
                 composite[t] = true;
-#endif  // BIT_IS_BIT
                 small_factors += 1;
             }
         }
@@ -378,12 +396,9 @@ GPUSieve::GPUSieve(const struct Config& config) {
             // I believe memcpyAsync is only async for GPU and CPU is sync with respect to the host.
         }
 
-#ifdef BIT_IS_BIT
-        composite_bytes = sizeof(char) * config.m_inc / 16 + 2;
-#else
         composite_bytes = sizeof(char) * config.m_inc / 2 + 2;
-#endif  // BIT_IS_BIT
         CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
+        CUDA_CHECK(cudaMallocAsync(&composite_compressed, composite_bytes / 8 + 1, runner));
 
         {
             CUDA_CHECK(cudaMallocHost((void**) &host_thread_stats, thread_stats_bytes));
@@ -407,8 +422,10 @@ GPUSieve::GPUSieve(const struct Config& config) {
         }
 
         if (config.verbose >= 1) {
-            printf("\tGPUSieve(): malloced: primes: 2x %'d  composite: %lu MB + %lu MB\n",
+            setlocale(LC_NUMERIC, "");
+            printf("\tGPUSieve(): malloced: primes: 2x %'d K composite: %lu MB + %lu MB\n",
                     4*num_primes, composite_bytes / 1024 / 1024, host_composite_bytes / 1024 / 1024);
+            setlocale(LC_NUMERIC, "C");
         }
 
         cudaStreamSynchronize(runner);
@@ -445,53 +462,51 @@ uint8_t* GPUSieve::run(
         const uint64_t X, const uint32_t max_p_i) {
 
     assert(m_inc % 2 == 0);
+    uint32_t BITS = m_inc / 2;
     double wheel_d, small_d, large_d, total_d;
 
     { // Run GPU Sieve!
         auto T0 = high_resolution_clock::now();
 
-        std::fill(host_wheel.begin(), host_wheel.end(), 0);
-        for( const auto& [d, neg_inv_K] : this->d_neg_inv_K) {
-            if (d == 2) continue;
+        if (1) {
+            std::fill(host_wheel.begin(), host_wheel.end(), 0);
+            for (const auto& [d, neg_inv_K] : this->d_neg_inv_K) {
+                if (d == 2) continue;
 
-            // m % d != 0, K % d != 0, if X % d == 0, (m*K + X) % d != 0
-            // Skipping these doesn't save any time and makes verification harder.
-            //if (X % d == 0) continue;
+                uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
+                mi_0 += (mi_0 & 1) ? 0 : d;
+                assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
 
-            uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
-            mi_0 += (mi_0 & 1) ? 0 : d;
-            assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
-
-            for( uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d ) {
-                host_wheel[i] = 1;
+                for (uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d)
+                    host_wheel[i] = 1;
             }
-        }
 
-        CUDA_CHECK(cudaMemcpyAsync(d_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
-        uint32_t needed_blocks = ((m_inc/2 - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
-        if (number_sieves == 0 && verbose >= 1) {
-            printf("\twheel %lu/%lu\n", std::count(host_wheel.begin(), host_wheel.end(), 1), d_wheel_bytes);
-            printf("\tLaunching wheel_kernel<<<%u,%u>>>\n", needed_blocks, BLOCK_SIZE);
-        }
+            CUDA_CHECK(cudaMemcpyAsync(d_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
+            uint32_t needed_blocks = ((BITS - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
+            if (number_sieves == 0 && verbose >= 1) {
+                size_t wheeled = std::count(host_wheel.begin(), host_wheel.end(), 1);
+                printf("\tLaunching wheel_kernel<<<%u,%u>>> (removes %lu/%lu)\n",
+                        needed_blocks, BLOCK_SIZE, wheeled, d_wheel_bytes);
+            }
 
-        wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
-            this->d_wheel_bytes,
-            this->d_wheel,
-            m_inc / 2,
-            this->composite
-        );
+            wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
+                this->d_wheel_bytes,
+                this->d_wheel,
+                BITS,
+                this->composite
+            );
+        } else {
+            CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
+        }
 
         auto T1 = high_resolution_clock::now();
 
-        // Not needed if wheel is done
-        //CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
-
         // Should be a small multiple of GRID_SIZE
-        num_small_primes = 4 * GRID_SIZE;
+        num_small_primes = 2 * GRID_SIZE;
 
         method2_small_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
             this->thread_stats,
-            m_start, m_inc / 2, X,
+            m_start, BITS, X,
             this->composite,
             this->num_small_primes,
             this->primes,
@@ -507,7 +522,7 @@ uint8_t* GPUSieve::run(
             //        this->num_small_primes, last_p_i);
             method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
                 this->thread_stats,
-                m_start, m_inc / 2, X,
+                m_start, BITS, X,
                 this->composite,
                 std::min(this->num_primes, max_p_i) - this->num_small_primes,
                 this->primes + this->num_small_primes,
@@ -552,27 +567,33 @@ uint8_t* GPUSieve::run(
     if (1) { // Parse results back to composite.
         auto T0 = high_resolution_clock::now();
 
-        CUDA_CHECK(cudaMemcpyAsync(host_composite, composite, composite_bytes,
+        // Compress byte indexed data to bit indexed data to save on transfer cost.
+        {
+            uint32_t intervals = (BITS - 1) / COMPRESS_BYTES_PER_THREAD + 1;
+            uint32_t block_size = 4 * BLOCK_SIZE;
+            uint32_t needed_blocks = (intervals - 1) / (2*BLOCK_SIZE) + 1;
+            //printf("\tcompress_kernel<<<%u, %u>>>\n", needed_blocks, 2*BLOCK_SIZE);
+            compress_kernel<<<needed_blocks, block_size, 0, runner>>>(
+                    BITS, composite, composite_compressed);
+        }
+        CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_compressed, composite_bytes/8,
                    cudaMemcpyDeviceToHost, runner));
         cudaStreamSynchronize(runner);
 
-        if (verbose + (X <= 2) >= 2) {
-#ifdef BIT_IS_BIT
+        if (verbose + (X <= 12) >= 3) {
+            // running this code takes a significant amount of time???
             uint32_t num_composite = 0;
-            for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
-                num_composite += __builtin_popcount(host_composite[mi]);
-            }
-#else
-            uint32_t num_composite = std::count(host_composite, host_composite + host_composite_bytes, 1);
-#endif  // BIT_IS_BIT
+            //for (uint32_t mi = 0; mi < (BITS + 7) / 8; mi++) {
+            //    num_composite += __builtin_popcount(host_composite[mi]);
+            //}
 
             auto T1 = high_resolution_clock::now();
             auto end_d = duration<double>(T1 - T0).count();
             total_d += end_d;
             printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, copy-back: %.4f  "
-                    "| %u/%lu composite\n",
+                    "| %u/%u composite\n",
                     total_d, wheel_d, small_d, large_d, end_d,
-                    num_composite, m_inc/2);
+                    num_composite, BITS);
         }
     }
 
