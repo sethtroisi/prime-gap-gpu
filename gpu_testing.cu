@@ -38,6 +38,8 @@
 
 #ifdef GPU_TESTING
 #include "miller_rabin.h"
+#else
+#include "xoroshiro128plus.h"
 #endif // GPU_TESTING
 
 using std::vector;
@@ -292,7 +294,6 @@ void run_gpu_thread(int runner_num, int verbose,
             batch.gpu_start = high_resolution_clock::now();
 
             // Could batch.unlock(), no need.
-
 #ifdef GPU_TESTING
             if (verbose >= 4)
                 printf("\tGPU(%d): Starting batch %lu\n", runner_num, processed_batches);
@@ -303,10 +304,16 @@ void run_gpu_thread(int runner_num, int verbose,
             if (verbose >= 4)
                 printf("\tGPU(%d): Finished batch %lu\n", runner_num, processed_batches);
 #else
-            // Return true for 1/10 results (helps not overflow sieve)
-            for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i++) {
-                if (batch.active[gpu_i]) {
-                    batch.result[gpu_i] = (std::rand() % 10) == 1;
+            // Return true for 1/8 results (helps not overflow sieve)
+            assert( GPU_BATCH_SIZE % 16 == 0 );
+            for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i += 16) {
+                uint32_t rand = rng_next();
+                assert( gpu_i + 16 <= GPU_BATCH_SIZE );
+                for (size_t j = 0; j < 16; j++) {
+                    if (batch.active[gpu_i + j]) {
+                        batch.result[gpu_i + j] = (rand & 7) == 0;
+                    }
+                    rand >>= 3;
                 }
             }
 #endif // GPU_TESTING
