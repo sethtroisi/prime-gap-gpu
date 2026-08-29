@@ -47,8 +47,8 @@
 #include "overflow.h"
 
 
-#define GPU_SIEVE
-// #define GPU_VERIFY
+//#define GPU_SIEVE
+//#define GPU_VERIFY
 
 #ifdef GPU_SIEVE
 #include "sieve_small.h"
@@ -419,31 +419,34 @@ void run_sieve_thread(void) {
         mpz_t K;
         struct Config config = sieve_data->config;
         init_K(config, K);
+
+        uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
+        (void)K_mod_d;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
-        vector<uint32_t> d_primes;
-        uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
+        vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_d;
+        p_and_neg_inverse_k.reserve(primesieve::count_primes(3, config.max_prime));
         {
             primesieve::iterator iter;
             uint64_t prime = iter.next_prime();
             assert (prime == 2);  // we skip 2 which is the oddest prime.
             for (prime = iter.next_prime(); prime < config.max_prime; prime = iter.next_prime()) {
-                if (prime <= config.p) {
-                    if (config.d % prime == 0)
-                        d_primes.push_back(prime);
+                if ((prime <= config.p) && (config.d % prime > 0))
                     continue;
-                }
+
                 const uint64_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 < base_r && base_r < prime );
                 const int64_t inv_K = _invert(base_r, prime);
                 assert( 0 < inv_K && ((uint32_t) inv_K) < prime );
                 assert( (inv_K * base_r) % prime == 1 );
+                const uint32_t neg_inv_K = prime - inv_K;
 
-                // Never sieve less than this.
-                if (prime < 100'000) {
-                    p_and_neg_inverse_k_small.emplace_back((uint32_t) prime, prime - inv_K);
+                if ((prime <= config.p) && config.d % prime == 0) {
+                    p_and_neg_inverse_k_d.emplace_back(prime, neg_inv_K);
+                } else if (prime < 100'000) {
+                    p_and_neg_inverse_k_small.emplace_back(prime, neg_inv_K);
                 } else {
-                    p_and_neg_inverse_k.emplace_back((uint32_t) prime, prime - inv_K);
+                    p_and_neg_inverse_k.emplace_back(prime, neg_inv_K);
                 }
             }
         }
@@ -473,6 +476,7 @@ void run_sieve_thread(void) {
         uint64_t total_unknown = 0;
         double avg_primes = 0;
         double total_time = 0;
+        double wheel_time = 0;
         double finalize_time = 0;
 
         uint64_t max_p_i = p_and_neg_inverse_k.size();
@@ -506,9 +510,9 @@ void run_sieve_thread(void) {
                 }
 
                 // lower max_p_i if not many sieves ready
-                //if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
-                //    max_p_i -= max_p_i / 10;
-                //}
+                if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
+                    max_p_i -= max_p_i / 10;
+                }
             }
 
             config = sieve_data->config;
@@ -516,7 +520,7 @@ void run_sieve_thread(void) {
             lock.unlock();
 
             auto s_start_t = high_resolution_clock::now();
-            double wheel_duration_t;
+            double wheel_duration_t = 0;
             const uint64_t m_start = config.m_start;
 
             assert (D % 2 == 0);
@@ -527,9 +531,8 @@ void run_sieve_thread(void) {
             assert (X % 2 == 0);
 
             assert(m_start % 2 == 0); // or fix the code
-            // Used to mark of each even index by factor of 2, not needed because only odd indexes.
-            //std::fill(composites.begin(), composites.end(), 0b1010101);
-            std::fill(composites.begin(), composites.end(), 0);
+            // Don't need fill because wheel sets (not or's)
+            //std::fill(composites.begin(), composites.end(), 0);
 
             { // Handle all divisors of d at one time.
                 auto s_wheel_t = high_resolution_clock::now();
@@ -538,18 +541,19 @@ void run_sieve_thread(void) {
                 std::fill(d_wheel.begin(), d_wheel.end(), 0);
                 uint32_t d_wheel_bits = 32 * d_wheel.size();
 
-                for (uint32_t d : d_primes) {
+                for( const auto& [d, neg_inv_K] : p_and_neg_inverse_k_d) {
                     if (d == 2) continue;
-                    const uint64_t m_start_shift = m_start % d;
-                    for (uint32_t m_i = 1; m_i < 2*D; m_i += 2) {
-                        // check if d divides (m_start + m_i) * K + X
-                        if (((m_start_shift + m_i) * K_mod_d + X) % d == 0) {
-                            // mark all later multiples
-                            for( uint32_t i = m_i >> 1; i < d_wheel_bits; i += d ) {
-                                d_wheel[i >> 5] |= 1 << (i & 31);
-                            }
-                            break;
-                        }
+
+                    // m % d != 0, K % d != 0, if X % d == 0, (m*K + X) % d != 0
+                    if (X % d == 0) continue;
+
+                    uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
+                    mi_0 += (mi_0 & 1) ? 0 : d;
+                    assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
+
+                    // mark all later multiples
+                    for( uint32_t i = mi_0 >> 1; i < d_wheel_bits; i += d ) {
+                        d_wheel[i >> 5] |= 1 << (i & 31);
                     }
                 }
 
@@ -566,7 +570,7 @@ void run_sieve_thread(void) {
 
             uint64_t prime = 0;
 
-#if defined(GPU_VERIFY) || !defined(GPU_SIEVE)
+#if !defined(GPU_SIEVE) || defined(GPU_VERIFY)
             if (1) {
                 // Break the larger range up into smaller ranges that are more likely to fit in L2 (2MB cache)
                 uint64_t intervals = M_INC_HALF / 995'000 + 1;
@@ -669,11 +673,13 @@ void run_sieve_thread(void) {
                     }
                 }
             }
-#endif   // defined(GPU_VERIFY) || !defined(GPU_SIEVE)
+#endif  // !defined(GPU_SIEVE) || defined(GPU_VERIFY)
 
 #ifdef GPU_SIEVE
             (void)max_p_i;
-            uint8_t *gpu_composite = gpu_sieve.run(m_start, m_inc, X);
+            // TODO get exact prime counts to agree.
+            uint8_t *gpu_composite = gpu_sieve.run(
+                    m_start, m_inc, X, max_p_i + p_and_neg_inverse_k_small.size());
 #endif // GPU_SIEVE
 
 #ifdef GPU_VERIFY
@@ -750,11 +756,11 @@ void run_sieve_thread(void) {
                 for (auto m_i : sieve_data->active_m_i) {
                     //assert(m_i < m_inc);
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
-#ifdef GPU_SIEVE
-                    if (!gpu_composite[m_i >> 1])
-#else
                     uint32_t t = m_i >> 1;
-                    if (!(composites[t >> 5] & 1 << (t & 31))) // && !(gpu_composite[m_i]))
+#ifdef GPU_SIEVE
+                    if (!gpu_composite[t])
+#else
+                    if (!(composites[t >> 5] & (1 << (t & 31))))
 #endif  // GPU_SIEVE
                         tests->push_back(m_i);
                 }
@@ -767,6 +773,7 @@ void run_sieve_thread(void) {
 
                 auto s_stop_t = high_resolution_clock::now();
                 finalize_duration_t = duration<double>(s_stop_t - s_start_t).count();
+                wheel_time += wheel_duration_t;
                 finalize_time += finalize_duration_t;
                 total_time += finalize_duration_t;
 
@@ -804,19 +811,20 @@ void run_sieve_thread(void) {
             double total_s = duration<double>(high_resolution_clock::now() - s_thread_start_t).count();
             setlocale(LC_NUMERIC, "");
             printf("\nSIEVE Timings:\n");
-            printf("\ttotal_m: %'lu (%'u/second) %.1f seconds\n",
-                    total_m, (uint32_t) (total_m / total_s), total_s);
-            printf("\tsieves: %lu\n",
-                    total_runs);
+            printf("\tsieves : %lu (%.3f/second, %.1f%% of total time)\n",
+                    total_runs, total_runs / total_s, 100.0 * total_time / total_s);
             printf("\tavg prime: %'lu\n", (uint64_t) (avg_primes / total_active));
-            printf("\tfinalize_time(%.1f%%): %.1f seconds (%.3f/sieve)\n",
-                    100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
-            printf("\ttotal_time: %.1f seconds (%.3f/sieve, %.3f secs/billion)\n",
-                    total_time, total_time / total_runs, total_time / total_runs * 1e9 / m_inc);
-            printf("\ttotal_active: %'lu, total_unknown: %'lu (%.2f%%)\n",
+            printf("\ttotal active: %'lu, unknown: %'lu (%.2f%%)\n",
                     total_active, total_unknown, 100.0 * total_unknown / total_active);
             printf("\tactive / run: %'lu, unknown / run: %'lu\n",
                     total_active / total_runs, total_unknown / total_runs);
+            printf("\t---------------------------------------\n");
+            printf("\ttotal time            : %.1f seconds (%.4f/sieve, %.3f secs/billion)\n",
+                    total_time, total_time / total_runs, total_time / total_runs * 1e9 / m_inc);
+            printf("\twheel time    (%4.1f%%) : %.1f seconds (%.4f/sieve)\n",
+                    100 * wheel_time / total_time, wheel_time, wheel_time / total_runs);
+            printf("\tfinalize time (%4.1f%%) : %.1f seconds (%.4f/sieve)\n",
+                    100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
             printf("\n");
             setlocale(LC_NUMERIC, "C");
         }
@@ -846,7 +854,7 @@ void SieveData::push_to_overflow_and_increment_M_range() {
         printf("\n");
     }
 
-    if (1) { // Used when benchmarking sieve
+    if (0) { // Used when benchmarking sieve
         overflow.lock();
         for (uint32_t m_i : active_m_i) {
             overflow.queue.emplace_back(m_start + m_i, min_X, Overflow::Type::NEXT_PRIME);

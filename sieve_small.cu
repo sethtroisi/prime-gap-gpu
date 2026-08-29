@@ -52,7 +52,7 @@ using namespace std::chrono;
 /**
  *  BIT_IS_BIT
  *      Pros: 8x less GPU memory, faster transfers
- *      Cons: Read & Write on every access, a small percentage of factors get lost.
+ *      Cons: Read & Write on every access (vs just write), a small percentage of factors get lost.
  */
 //#define BIT_IS_BIT
 
@@ -305,7 +305,9 @@ GPUSieve::GPUSieve(const struct Config& config) {
             assert( prime == 3 );
             num_primes = 0;
             for (; prime <= config.max_prime; prime = iter.next_prime()) {
-                if (prime <= config.p && config.d % prime != 0) {
+                // TODO figure out better wheel strategy
+                //if (prime <= config.p && (config.d % prime > 0)) {
+                if (prime <= config.p) {
                     continue;
                 }
 
@@ -323,6 +325,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
                 host_neg_inv_Ks.push_back(neg_inv_K);
                 num_primes += 1;
             }
+            //printf("Processed %u primes\n", num_primes);
 
             const size_t bytes = sizeof(uint32_t) * num_primes;
             CUDA_CHECK(cudaMallocAsync(&primes, bytes, runner));
@@ -366,7 +369,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
 }
 
 GPUSieve::~GPUSieve() {
-    printf("~GPUSieve\n");
+    printf("GPUSieve Timings\n");
     printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
             total_sieve_time, number_sieves, 1000 * total_sieve_time / number_sieves);
     printf("\n");
@@ -387,7 +390,9 @@ GPUSieve::~GPUSieve() {
     mpz_clear(K);
 }
 
-uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X) {
+uint8_t* GPUSieve::run(
+        const uint64_t m_start, const uint64_t m_inc,
+        const uint64_t X, const uint32_t max_p_i) {
 
     assert(m_inc % 2 == 0);
     uint32_t kernel1_ms, kernel2_ms, kernel_ms;
@@ -396,8 +401,8 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
         auto T0 = high_resolution_clock::now();
         CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
 
-        num_small_primes = 20;
-        // TODO print out n'th prime or something.
+        // Should be a small multiple of GRID_SIZE
+        num_small_primes = 4 * GRID_SIZE;
 
         method2_small_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
             this->thread_stats,
@@ -411,14 +416,19 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
         cudaStreamSynchronize(runner);
         auto T1 = high_resolution_clock::now();
 
-        method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
-            this->thread_stats,
-            m_start, m_inc / 2, X,
-            this->composite,
-            this->num_primes - this->num_small_primes,
-            this->primes + this->num_small_primes,
-            this->neg_inv_Ks + this->num_small_primes
-        );
+        uint32_t last_p_i = std::min(this->num_primes, max_p_i);
+        if (last_p_i > this->num_small_primes) {
+            //printf("Running primes index: %u to %u with medium\n",
+            //        this->num_small_primes, last_p_i);
+            method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+                this->thread_stats,
+                m_start, m_inc / 2, X,
+                this->composite,
+                std::min(this->num_primes, max_p_i) - this->num_small_primes,
+                this->primes + this->num_small_primes,
+                this->neg_inv_Ks + this->num_small_primes
+            );
+        }
 
         cudaStreamSynchronize(runner);
         auto T2 = high_resolution_clock::now();
@@ -460,7 +470,7 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
                    cudaMemcpyDeviceToHost, runner));
         cudaStreamSynchronize(runner);
 
-        if (verbose >= 2) {
+        if (verbose + (X == 2) >= 3) {
 #ifdef BIT_IS_BIT
             uint32_t num_composite = 0;
             for (uint32_t mi = 0; mi < host_composite_bytes; mi++) {
@@ -475,7 +485,7 @@ uint8_t* GPUSieve::run(const uint64_t m_start, const uint64_t m_inc, const uint6
             printf("\tGPU sieve %lu ms | kernels: %u + %u ms "
                     "| copy-back: %lu ms | %u/%lu composite\n",
                     kernel_ms + bitfiddling_ms, kernel1_ms, kernel2_ms,
-                    bitfiddling_ms, num_composite, m_inc);
+                    bitfiddling_ms, num_composite, m_inc/2);
         }
     }
 

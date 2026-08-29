@@ -32,7 +32,7 @@ class GPUSieve {
         GPUSieve(const struct Config& config);
         ~GPUSieve();
 
-        uint8_t* run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X);
+        uint8_t* run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X, const uint32_t max_p_i);
 
     private:
         cudaStream_t runner;
