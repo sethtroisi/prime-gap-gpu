@@ -41,7 +41,12 @@ class GPUSieve {
 
         uint32_t verbose = 0;
         uint64_t number_sieves = 0;
-        double   total_sieve_time = 0;
+        // Timing
+        double   d_total = 0.0;
+        double   d_wheel = 0.0;
+        double   d_k1    = 0.0;
+        double   d_k2    = 0.0;
+        double   d_copy  = 0.0;
 
         uint32_t num_primes;
         uint32_t num_small_primes;
@@ -68,7 +73,7 @@ class GPUSieve {
         uint8_t *composite;
         uint8_t *composite_compressed;
 
-        uint8_t *d_wheel;
+        uint8_t *D_wheel;
         /******************************/
         /******** GPU POINTERS ********/
 
