@@ -622,8 +622,8 @@ void run_cpu_overflow_worker(const int thread_index,
             continue; // Might have been removed while locking.
         }
 
-        if (stats.tested % 50'000 == 0 && overflow.size > overflow_too_much) {
-            printf("\tCPU Sieve Queue: %u open, %lu processed\n",
+        if (stats.tested % 100'000 == 0 && overflow.size > overflow_too_much) {
+            printf("\tCPU Sieve Queue is behind: %u open, %lu processed\n",
                     overflow.size.load(), stats.tested.load());
         }
 

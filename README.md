@@ -67,6 +67,7 @@ valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2
     * Decreasing leads to faster sieving.
   * `max-prime` better to increase at some point top primes never run
   * `minc`: TODO add some metric to tune on.
+  * `min-merit` math | tuned ~5% past optimal. Reduces overflow by 3x at cost of 4-8% overall efficency.
 
 These are likely set to good values
 
@@ -76,36 +77,40 @@ These are likely set to good values
 
 ## Upgrades
 
-  * [ ] Speeding up `run_overflow_coordinator_thread` work
-     * `--cpu-fraction` at 2% wasn't saturating GPU testing.
-       Increasing to 5% would help but would increase overflow work by 2-3X.
-       Overflow work is probably sieved less agressievly than the main work so this is "less efficient".
-       If the 5% of overflow takes 2x more prp tests, the overallwork is 105% which is great if it helps
-       raise GPU utilization from 80% to 90%.
-
-  * Consider for much later
-    * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.
-      * Pros:
-        * Would free up 5+ CPU cores
-      * Cons:
-        * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
-    * Choose a consistent X to overflow at.
-      * Pros:
-        * If known before hand might simplify some of the CPU overflow sieve math & tracking
-        * Can start sieves for next range ahead of time.
-      * Cons:
-        * Less dynamic flexibility
+  * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.
+    * Pros:
+      * Would free up 5+ CPU cores
+      * Allows for setting lower `min_gap_to_continue` which is 5% more optimal.
+    * Cons:
+      * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
+  * Consider choosing a consistent X to overflow at.
+    * Pros:
+      * If known before hand might simplify some of the CPU overflow sieve math & tracking
+      * Can start sieves for next range ahead of time.
+      * Don't have to track `sieve_start` per overflow
+    * Cons:
+      * Less dynamic flexibility
+  * On 2026/08/31 most time was spent in these places:
+    * GPU Timing: 260% running, very low waiting 4 sieve, 30% wait done.
+      * Wait done is `run_testing_thread`, `increment_X` & `push_to_overflow`.
+        * **Measured as 5s/ reset which seems like it could be optimized slightly**
+    * GPUSieve
+      * 50/50 in small and large kernels. Seems great!
+      * **There are known large kernel optimizations** that could be tried
+    * CPUSieve
+      * 30% spent in finalize, **would be nice to reduce**, not sure how.
+      * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
+    * Overflow:
+       * 99% on GPU. 9K in sieve, 45K in `prev_prime`.
+       * Requires 6 CPU workers, could go to 3 **if `prev_prime` was handled on GPU.**
+       * <1% of total prime test.
 
 ## TODO
-  * [ ] Reduce the 10% of the time sieve is late
-  * [ ] Tune `min-merit` math to understand cost of setting 28 vs 26.
-  * [ ] Faster sieving
-    * [ ] Tune 995'000 constant
-    * Multithreading -> For small primes this is trivial -> For large primes it's also probably trivial
-    * AVX512 scatter is maybe faster or not?
-    * Why was my old Ryzen 3900x faster at sieving?
-    * Efficency with current model is 10.6 PRP tests per `m`, at 100M this is 9.9 PRP/m (+7%)
-      * Gain is probably more because initial sieve can be higher too.
+
+  * [ ] Faster GPU sieving
+  * [ ] Is there a way to tricker overflow GPU testing only when sieving is "small"
+    * Wait till `max_p_i` is reduced, fire a signal, overflow runs till empty.
+    * This shifts work so that GPU can be more full when main testing is sparser
 
 ## TODONE
 

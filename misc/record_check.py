@@ -98,7 +98,7 @@ def find_possible_records(args):
             print(f"Found {len(all_m)} records, max M={M:,}")
 
         K = gmpy2.primorial(P) // D
-        N = M * K * 14 // 10
+        N = M * K * 12 // 10
         N_log = gmpy2.log(N)
         digits = gmpy2.num_digits(N) - 2
 
@@ -113,7 +113,7 @@ def find_possible_records(args):
                 continue
 
             new_merit = gap / N_log
-            if new_merit > 31:
+            if new_merit > 31.5:
                 break
 
             i += 1

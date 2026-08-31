@@ -199,7 +199,7 @@ TestData::TestData(const struct Config config)
     m_inc = config.m_inc;
     verbose = config.verbose;
 
-    // Need to be able to write to config.minc >> 6
+    // Need to be able to write to entry at [config.minc >> 6]
     found_prime_m_i.resize((m_inc/2) / 32 + 1, 0);
     full_reset();
 }
@@ -759,7 +759,16 @@ void run_sieve_thread(void) {
                 assert( sieve_data->active_m_i.size() );
                 assert( sieve_data->active_m_i.back() < m_inc );
 
-                // "most" (80-90%+) should be composite, so this should be ~12-20%
+                /**
+                 * Various optimization ideas
+                 * 1. Avoid push_back by having this be uint32_t *
+                 * 2. Uncondiontal set on test[i] (need to resize before hand?)
+                 * 3. store m_inc as uint16_t?
+                 * 4. Try to reduce initial active_m_i?
+                 */
+                printf("capacity: %lu\n", tests->capacity());
+                // "most" (80-90%+) should be composite, so this keep ~14-30%
+                // Very similiar to `remove_vector`.
                 for (auto m_i : sieve_data->active_m_i) {
                     //assert(m_i < m_inc);
                     //assert(m_i & 1 == 1); // M is odd, M start is even, m_i must be odd.
@@ -895,7 +904,7 @@ void run_testing_thread(const struct Config og_config) {
         const float min_merit = og_config.min_merit;
 
         // TODO: Move this output into overflow.cpp
-        // See THEORY.md! Added const is small preference for doing less prev_p.
+        // See THEORY.md! Added const (2.6) is small preference for doing less prev_p.
         const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
 
         const uint64_t count_valid_m = count_num_m(og_config.m_start, og_config.m_inc, D);
@@ -1019,6 +1028,7 @@ void run_testing_thread(const struct Config og_config) {
 
                 sieve_mtx.lock();
 
+                // TODO time this.
                 remove_vector(sieve_data->active_m_i, test_data.found_prime_m_i);
                 if (sieve_data->active_m_i.size() < overflow_count) {
                     test_data.stats.s_gap_out_of_sieve_next += sieve_data->active_m_i.size();
