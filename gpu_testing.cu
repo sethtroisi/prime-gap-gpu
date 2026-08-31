@@ -32,14 +32,13 @@
 #include "gap_common.h"
 #include "gap_stats.h"
 #include "overflow.h"
+#include "xoroshiro128plus.h"
 
 // Comment out to use fake PRP test (for benchmarking)
 #define GPU_TESTING
 
 #ifdef GPU_TESTING
 #include "miller_rabin.h"
-#else
-#include "xoroshiro128plus.h"
 #endif // GPU_TESTING
 
 using std::vector;
@@ -104,7 +103,7 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
 
 #ifdef GPU_TESTING
     // Spot check roughly one in a million.
-    if (found > 0 && (rand() & 63) == 0) {
+    if (found > 0 && (rng_next() & 63) == 0) {
         // Spot check
         overflow.push_to_queue(
                 test_data.m_start + m_i, batch.x,
@@ -183,10 +182,15 @@ class GPURunner::GPURunnerImpl {
                 // run batch on gpu and wait for results to be set
                 runner.run_test(batch.i, batch.z, batch.result);
             #else
-                // Return true for 1/10 results (helps not overflow sieve)
-                for (size_t i = 0; i < batch.i; i++) {
-                    if (batch.active[i]) {
-                        batch.result[i] = (std::rand() % 10) == 1;
+                assert( batch.i % 16 == 0 );
+                for (size_t gpu_i = 0; gpu_i < batch.i; gpu_i += 16) {
+                    uint64_t rand = rng_next();
+                    assert( gpu_i + 16 <= batch.i );
+                    for (size_t j = 0; j < 16; j++) {
+                        if (batch.active[gpu_i + j]) {
+                            batch.result[gpu_i + j] = (rand & 7) == 0;
+                        }
+                        rand >>= 3;
                     }
                 }
             #endif // GPU_TESTING
@@ -307,7 +311,7 @@ void run_gpu_thread(int runner_num, int verbose,
             // Return true for 1/8 results (helps not overflow sieve)
             assert( GPU_BATCH_SIZE % 16 == 0 );
             for (size_t gpu_i = 0; gpu_i < GPU_BATCH_SIZE; gpu_i += 16) {
-                uint32_t rand = rng_next();
+                uint64_t rand = rng_next();
                 assert( gpu_i + 16 <= GPU_BATCH_SIZE );
                 for (size_t j = 0; j < 16; j++) {
                     if (batch.active[gpu_i + j]) {

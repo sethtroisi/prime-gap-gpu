@@ -13,7 +13,7 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o gpu_testing.o overflow.o sieve_small.o xoroshiro128plus.o
+OBJS	= gap_common.o gpu_testing.o gpu_sieve.o overflow.o xoroshiro128plus.o
 OUT	= gap_search_gpu
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native
@@ -31,7 +31,7 @@ LDFLAGS	= -lgmp -lprimesieve -lcudart
 
 all: $(OUT)
 
-sieve_small.o: sieve_small.cu
+gpu_sieve.o: gpu_sieve.cu
 	nvcc $^ -o $@ -c $(CUDA_FLAGS)
 
 gpu_testing.o: gpu_testing.cu

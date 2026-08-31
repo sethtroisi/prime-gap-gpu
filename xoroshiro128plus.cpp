@@ -16,6 +16,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 
 #include <stdint.h>
+#include <cstdlib>
 
 /* This is xoroshiro128+ 1.0, our best and fastest small-state generator
    for floating-point numbers, but its state space is large enough only
@@ -46,7 +47,9 @@ static inline uint64_t rotl(const uint64_t x, int k) {
 }
 
 
-static uint64_t s[2];
+static uint64_t s[2] = {
+    (((uint64_t) rand()) << 32) | rand(),
+    (((uint64_t) rand()) << 32) | rand()};
 
 uint64_t rng_next(void) {
 	const uint64_t s0 = s[0];

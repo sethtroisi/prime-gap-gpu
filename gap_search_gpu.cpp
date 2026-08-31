@@ -53,7 +53,7 @@
 #define CPU_SIEVE (!defined(GPU_SIEVE) || defined(GPU_VERIFY))
 
 #ifdef GPU_SIEVE
-#include "sieve_small.h"
+#include "gpu_sieve.h"
 #endif // GPU_SIEVE
 
 
@@ -766,7 +766,6 @@ void run_sieve_thread(void) {
                  * 3. store m_inc as uint16_t?
                  * 4. Try to reduce initial active_m_i?
                  */
-                printf("capacity: %lu\n", tests->capacity());
                 // "most" (80-90%+) should be composite, so this keep ~14-30%
                 // Very similiar to `remove_vector`.
                 for (auto m_i : sieve_data->active_m_i) {

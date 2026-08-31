@@ -46,10 +46,12 @@ class GPUSieve {
         double   d_wheel = 0.0;
         double   d_k1    = 0.0;
         double   d_k2    = 0.0;
+        double   d_k3    = 0.0;
         double   d_copy  = 0.0;
 
         uint32_t num_primes;
         uint32_t num_small_primes;
+        uint32_t num_medium_primes; // primes < m_inc/2
 
         mpz_t K;
         uint32_t D;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sieve_small.h"
+#include "gpu_sieve.h"
 
 #include <algorithm>
 #include <bitset>
@@ -147,7 +147,7 @@ __global__ void compress_kernel(
 
 
 /** Called by host executed on device. */
-__global__ void method2_small_primes_kernal(
+__global__ void small_primes_kernal(
     int64_t *thread_stats,
 
     /** config section **/
@@ -200,7 +200,7 @@ __global__ void method2_small_primes_kernal(
 }
 
 /** Called by host executed on device. */
-__global__ void method2_medium_primes_kernal(
+__global__ void medium_primes_kernal(
     int64_t *thread_stats,
 
     /** config section **/
@@ -212,7 +212,6 @@ __global__ void method2_medium_primes_kernal(
 
     uint32_t num_primes,
     uint32_t *primes,
-    // uint32_t *remainders, // r = K mod p
     int32_t *neg_inv_Ks      // r^-1 mod p
 ) {
     uint64_t t0 = clock64();
@@ -229,30 +228,8 @@ __global__ void method2_medium_primes_kernal(
 
     uint32_t pi_0 = thread_idx;
     for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
-    //for (uint32_t pi = threadIdx.x; pi < num_primes; pi += BLOCK_SIZE) {
         const uint64_t prime = primes[pi];
-        //const uint32_t base_r = remainders[pi];
         const int64_t neg_inv_K = neg_inv_Ks[pi];
-
-        // {
-        //     // as large as prime^2
-        //     uint64_t t = ((uint64_t) neg_inv_K) * base_r;
-        //     if (index == 0 && prime >= next_print) {
-        //         printf("\tGPU @ prime(%u): %u\n", pi, prime);
-
-        //         if (next_print == next_mult) {
-        //             print_mult *= 10;
-        //             next_print = print_mult;
-        //             next_mult = 5 * print_mult;
-        //         } else {
-        //             next_print += print_mult;
-        //         }
-        //     }
-        //     assert(t % prime == (prime-1));
-        //     assert(base_r < prime);
-        //     assert(0 < neg_inv_K);
-        //     assert(neg_inv_K < prime);
-        // }
 
         // -M_start % p
         int64_t mi_0_shift = prime - (M_start % prime);
@@ -281,6 +258,64 @@ __global__ void method2_medium_primes_kernal(
     thread_stats[4 * index + 3] = index;
 }
 
+/** Called by host executed on device. */
+__global__ void large_primes_kernal(
+    int64_t *thread_stats,
+
+    /** config section **/
+    const uint64_t M_start,
+    const uint32_t M_INC_HALF,
+    const uint64_t X,
+
+    uint8_t *composite,
+
+    uint32_t num_primes,
+    uint32_t *primes,
+    int32_t *neg_inv_Ks      // r^-1 mod p
+) {
+    uint64_t t0 = clock64();
+    uint32_t small_factors = 0;
+
+    // Indexing is hard for me
+    // blockIdx.x / gridDim.x
+    // threadIdx.x / blockDim.x
+    assert( gridDim.x == GRID_SIZE );
+    assert( blockDim.x == BLOCK_SIZE );
+
+    uint32_t threads = GRID_SIZE * BLOCK_SIZE;
+    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    uint32_t pi_0 = thread_idx;
+    for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
+        const uint64_t prime = primes[pi];
+        const int64_t neg_inv_K = neg_inv_Ks[pi];
+
+        // -M_start % p
+        int64_t mi_0_shift = prime - (M_start % prime);
+
+        // Safe from overflow as (SL * prime + prime) < int64
+        int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
+        // benchmark as "? prime : 0" vs "* prime";
+        //mi_0 += ((mi_0 & 1) == 0) * prime;
+        mi_0 += (mi_0 & 1) ? 0 : prime;
+        mi_0 >>= 1;
+
+        // TODO benchmark with unconditional set (of some know composite value)
+        if (mi_0 < M_INC_HALF) {
+            composite[mi_0] = true;
+            small_factors += 1;
+        }
+    }
+
+    uint64_t t1 = clock64();
+
+    // 4 is stats_per_thread.
+    int index = threadIdx.x + (blockIdx.x * BLOCK_SIZE);
+    thread_stats[4 * index + 0] = t0;
+    thread_stats[4 * index + 1] = t1;
+    thread_stats[4 * index + 2] = small_factors;
+    thread_stats[4 * index + 3] = index;
+}
 
 
 
@@ -365,6 +400,10 @@ GPUSieve::GPUSieve(const struct Config& config) {
                 num_primes += 1;
             }
             //printf("Processed %u primes\n", num_primes);
+            num_medium_primes = std::distance(host_primes.begin(),
+                    std::lower_bound(host_primes.begin(), host_primes.end(), config.m_inc / 2));
+            assert(2 * host_primes[num_medium_primes-1] < config.m_inc);
+            assert(2 * host_primes[num_medium_primes] >= config.m_inc);
 
             const size_t bytes = sizeof(uint32_t) * num_primes;
             CUDA_CHECK(cudaMallocAsync(&primes, bytes, runner));
@@ -419,10 +458,11 @@ GPUSieve::~GPUSieve() {
     printf("GPUSieve Timings\n");
     printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
             d_total, number_sieves, 1000 * d_total / number_sieves);
-    printf("\twheel : %4.1f seconds (%4.1f%%)\n", d_wheel, 100.0 * d_wheel / d_total);
-    printf("\tsmall : %4.1f seconds (%4.1f%%)\n", d_k1, 100.0 * d_k1 / d_total);
-    printf("\tlarge : %4.1f seconds (%4.1f%%)\n", d_k2, 100.0 * d_k2 / d_total);
-    printf("\tcopy  : %4.1f seconds (%4.1f%%)\n", d_copy, 100.0 * d_copy / d_total);
+    printf("\twheel  : %4.1f seconds (%4.1f%%)\n", d_wheel, 100.0 * d_wheel / d_total);
+    printf("\tsmall  : %4.1f seconds (%4.1f%%)\n", d_k1, 100.0 * d_k1 / d_total);
+    printf("\tmedium : %4.1f seconds (%4.1f%%)\n", d_k2, 100.0 * d_k2 / d_total);
+    printf("\tlarge  : %4.1f seconds (%4.1f%%)\n", d_k3, 100.0 * d_k3 / d_total);
+    printf("\tcopy   : %4.1f seconds (%4.1f%%)\n", d_copy, 100.0 * d_copy / d_total);
     printf("\n");
 
     CUDA_CHECK(cudaFreeHost(host_thread_stats));
@@ -445,7 +485,7 @@ uint8_t* GPUSieve::run(
 
     assert(m_inc % 2 == 0);
     uint32_t BITS = m_inc / 2;
-    double wheel_d, small_d, large_d, total_d;
+    double wheel_d, small_d, medium_d, large_d, total_d;
 
     auto t_sieve_start = high_resolution_clock::now();
     { // Run GPU Sieve!
@@ -476,6 +516,7 @@ uint8_t* GPUSieve::run(
                 BITS,
                 this->composite
             );
+            cudaStreamSynchronize(runner);
         } else {
             CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
         }
@@ -484,7 +525,8 @@ uint8_t* GPUSieve::run(
 
         // Should be a small multiple of GRID_SIZE
         num_small_primes = 2 * GRID_SIZE;
-        method2_small_primes_kernal<<<num_small_primes, BLOCK_SIZE, 0, runner>>>(
+        assert( num_small_primes < this->num_primes);
+        small_primes_kernal<<<num_small_primes, BLOCK_SIZE, 0, runner>>>(
             this->thread_stats,
             m_start, BITS, X,
             this->composite,
@@ -495,30 +537,46 @@ uint8_t* GPUSieve::run(
         cudaStreamSynchronize(runner);
         auto T2 = high_resolution_clock::now();
 
-        uint32_t last_p_i = std::min(this->num_primes, max_p_i);
-        if (last_p_i > this->num_small_primes) {
-            //printf("Running primes index: %u to %u with medium\n",
-            //        this->num_small_primes, last_p_i);
-            method2_medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
-                this->thread_stats,
-                m_start, BITS, X,
-                this->composite,
-                std::min(this->num_primes, max_p_i) - this->num_small_primes,
-                this->primes + this->num_small_primes,
-                this->neg_inv_Ks + this->num_small_primes
-            );
-        }
+        uint32_t medium_i = std::min(this->num_medium_primes, max_p_i);
+        assert( medium_i > this->num_small_primes );
+        medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+            this->thread_stats,
+            m_start, BITS, X,
+            this->composite,
+            medium_i - this->num_small_primes,
+            this->primes + this->num_small_primes,
+            this->neg_inv_Ks + this->num_small_primes
+        );
 
-        // TODO add method2_large_primes_kernal
-        // Avoids loop when prime > M_INC_HALF
-        // Maybe implement the skip division test
-
+        // TODO check consequence of sync here.
         cudaStreamSynchronize(runner);
         auto T3 = high_resolution_clock::now();
 
-        wheel_d = duration<double>(T1 - t_sieve_start).count();
-        small_d = duration<double>(T2 - T1).count();
-        large_d = duration<double>(T3 - T2).count();
+        uint32_t large_i = std::min(this->num_primes, max_p_i);
+        if (large_i > medium_i) {
+            // Could be overlapped with medium_primes.
+            large_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
+                this->thread_stats,
+                m_start, BITS, X,
+                this->composite,
+                large_i - medium_i,
+                this->primes + medium_i,
+                this->neg_inv_Ks + medium_i
+            );
+        }
+
+        //printf("Running small to %u, medium to %u, large to %u\n",
+        //        this->num_small_primes-1, medium_i-1, large_i-1);
+
+        // Maybe implement the skip division test
+
+        cudaStreamSynchronize(runner);
+        auto T4 = high_resolution_clock::now();
+
+        wheel_d  = duration<double>(T1 - t_sieve_start).count();
+        small_d  = duration<double>(T2 - T1).count();
+        medium_d = duration<double>(T3 - T2).count();
+        large_d  = duration<double>(T4 - T3).count();
     }
 
     if (0) { // Read thread stats
@@ -569,7 +627,8 @@ uint8_t* GPUSieve::run(
         d_total += total_d;
         d_wheel += wheel_d;
         d_k1    += small_d;
-        d_k2    += large_d;
+        d_k2    += medium_d;
+        d_k3    += large_d;
         d_copy  += copy_d;
 
         bool should_print = (
@@ -582,10 +641,9 @@ uint8_t* GPUSieve::run(
             for (uint32_t mi = 0; mi < (BITS + 7) / 8; mi++) {
                 num_composite += __builtin_popcount(host_composite[mi]);
             }
-            printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, copy-back: %.4f  "
+            printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, %.4f, copy-back: %.4f  "
                     "| %u/%u composite\n",
-                    total_d, wheel_d, small_d, large_d, copy_d,
-                    num_composite, BITS);
+                    total_d, wheel_d, small_d, medium_d, large_d, copy_d, num_composite, BITS);
         }
     }
 
