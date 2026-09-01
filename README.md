@@ -83,6 +83,7 @@ These are likely set to good values
       * Allows for setting lower `min_gap_to_continue` which is 5% more optimal.
     * Cons:
       * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
+      * Currently this is using CPU and would move that to GPU work.
   * Consider choosing a consistent X to overflow at.
     * Pros:
       * If known before hand might simplify some of the CPU overflow sieve math & tracking
@@ -95,8 +96,8 @@ These are likely set to good values
       * Wait done is `run_testing_thread`, `increment_X` & `push_to_overflow`.
         * **Measured as 5s/ reset which seems like it could be optimized slightly**
     * GPUSieve
-      * 50/50 in small and large kernels. Seems great!
-      * **There are known large kernel optimizations** that could be tried
+      * 10% small, 40% medium, 40% large.
+      * Tried some large kernel optimizations that didn't help.
     * CPUSieve
       * 30% spent in finalize, **would be nice to reduce**, not sure how.
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
@@ -107,8 +108,7 @@ These are likely set to good values
 
 ## TODO
 
-  * [ ] Faster GPU sieving
-  * [ ] Is there a way to tricker overflow GPU testing only when sieving is "small"
+  * [ ] Is there a way to start overflow GPU testing only when sieving is "small"
     * Wait till `max_p_i` is reduced, fire a signal, overflow runs till empty.
     * This shifts work so that GPU can be more full when main testing is sparser
 
