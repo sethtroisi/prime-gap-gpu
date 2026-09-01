@@ -894,17 +894,9 @@ void run_testing_thread(const struct Config og_config) {
         std::ignore = nice(-2); // Increase priority a bit
         cout << endl;
 
-        // K is initialized in prob_prime_and_stats
         mpz_t K;
-        double K_log = prob_prime_and_stats(og_config, K);
-        //const uint64_t P = og_config.p;
+        init_K(og_config, K);
         const uint64_t D = og_config.d;
-
-        const float min_merit = og_config.min_merit;
-
-        // TODO: Move this output into overflow.cpp
-        // See THEORY.md! Added const (2.6) is small preference for doing less prev_p.
-        const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(min_merit * std::log(2) + 1);
 
         const uint64_t count_valid_m = count_num_m(og_config.m_start, og_config.m_inc, D);
         const uint64_t overflow_count = count_valid_m * og_config.cpu_fraction;
@@ -912,21 +904,11 @@ void run_testing_thread(const struct Config og_config) {
         // Print Header info
         if (og_config.verbose >= 1) {
             setlocale(LC_NUMERIC, "");
-            // ----- Merit / Sieve stats
-            float m_log = log(og_config.m_inc);
-                printf("Min Gap ~= %'d (for merit > %.1f)\n",
-                    (int) (min_merit * (K_log + m_log)), min_merit);
-                printf("Min Gap to continue ~= %'d (merit = %.1f)\n",
-                    (int) (MIN_MERIT_TO_CONTINUE * (K_log + m_log)),
-                    MIN_MERIT_TO_CONTINUE);
-
             const uint64_t M_inc = og_config.m_inc;
             assert(count_valid_m > 0 && count_valid_m <= M_inc);
             printf("\nTesting ranges of %'ld ~ %'ld m per range.\n", M_inc, count_valid_m);
             printf("\tOverflowing to CPU when less than %lu active m\n\n", overflow_count);
             setlocale(LC_NUMERIC, "C");
-
-            //printf("\tStarting to create GPU Batches\n");
         }
 
         /* Note: Uses a double batched system
@@ -1156,8 +1138,12 @@ void prime_gap_test(struct Config config) {
     sieve_data = std::make_unique<SieveData>(config);
 
     // This has output that's nicer close to the top.
-    std::thread testing_thread{run_testing_thread, config};
+    std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
     usleep(50'000); // 50ms
+
+    // This calls GPUSieve which takes a few seconds to build prime list
+    std::thread testing_thread{run_testing_thread, config};
+    usleep(1'000'000);
 
     // Setup
     {
@@ -1176,8 +1162,6 @@ void prime_gap_test(struct Config config) {
         sieve_mtx.unlock();
     }
     std::thread sieve_thread(run_sieve_thread);
-
-    std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
 
     while (is_running && stop_queue <= 1) {
         usleep(50'000); // 50ms

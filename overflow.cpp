@@ -213,7 +213,7 @@ void process_result(
 /** Expects center to be correctly set */
 static
 void handle_next_prime_result(
-        const float MIN_GAP_TO_CONTINUE,
+        const uint32_t MIN_GAP_TO_CONTINUE,
         const float min_merit,
         const double K_log, const uint32_t P, const uint32_t D,
         const mpz_t &K, mpz_t &center,
@@ -366,7 +366,7 @@ uint32_t next_prime_distance(
 
 static
 void run_tests_on_cpu(
-        const float MIN_GAP_TO_CONTINUE, const float min_merit,
+        const uint32_t MIN_GAP_TO_CONTINUE, const float min_merit,
         const double K_log, const uint32_t P, const uint32_t D,
         const uint64_t m, const uint64_t min_x,
         const mpz_t &K, mpz_t &center,
@@ -476,7 +476,7 @@ static
 uint32_t run_overflow_batch(
         GPURunner &runner,
         OverflowBatch &overflow_batch,
-        const float MIN_GAP_TO_CONTINUE,
+        const uint32_t MIN_GAP_TO_CONTINUE,
         const float MIN_MERIT, const float K_log, const uint32_t P, const uint32_t D,
         const mpz_t &K, mpz_t &center, mpz_t &next_p, mpz_t &prev_p,
         mpz_t &tmp, mpz_t& tmp2,
@@ -589,19 +589,36 @@ void run_cpu_overflow_worker(const int thread_index,
     }
     mpz_t K, center, next_p, prev_p, tmp, tmp2;
     mpz_inits(center, next_p, prev_p, tmp, tmp2, NULL);
-    init_K(og_config, K);
 
     const uint32_t P = og_config.p;
     const uint32_t D = og_config.d;
 
-    double K_log = calc_log_K(og_config);
+    if (thread_index == 0) {
+       prob_prime_and_stats(og_config, K);
+    } else {
+       init_K(og_config, K);
+    }
+    double K_log = _log(K);
+
     const float MIN_MERIT = og_config.min_merit;
     // 2-5x what comes in per batch
     const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
-    // See THEORY.md! Added const is small preference for doing less prev_p.
+    // See THEORY.md! +2.6 is small preference for doing less prev_p.
     const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(MIN_MERIT * std::log(2) + 1);
-    const float MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + log(og_config.m_inc));
+    const float m_log = log(og_config.m_start + og_config.m_inc);
+    const uint32_t MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + m_log);
+
+    if (thread_index == 0 && og_config.verbose >= 1) {
+        setlocale(LC_NUMERIC, "");
+        // ----- Merit / Sieve stats
+        float m_log = log(og_config.m_inc);
+            printf("Min Gap ~= %'d (for merit > %.1f)\n",
+                (int) (MIN_MERIT * (K_log + m_log)), MIN_MERIT);
+            printf("Min Gap to continue ~= %'d (merit = %.1f)\n",
+                   MIN_GAP_TO_CONTINUE, MIN_MERIT_TO_CONTINUE);
+        setlocale(LC_NUMERIC, "C");
+    }
 
     std::ofstream record_stream(std::format("records_{}.txt", P), std::ios_base::app);
 
