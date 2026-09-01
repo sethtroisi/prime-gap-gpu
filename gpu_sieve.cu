@@ -84,20 +84,12 @@ __global__ void wheel_kernel(
     const uint64_t composite_size,
     uint8_t *composite
 ) {
-    uint32_t threads = gridDim.x * blockDim.x;
-    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t stride = gridDim.x * blockDim.x;
 
-    uint32_t copies = (composite_size-1) / d_wheel_size + 1;
-    assert(threads > copies);
-    if (thread_idx >= copies)
-        return;
-
-    uint32_t start_i = thread_idx * d_wheel_size;
-    uint32_t c_size = composite_size - start_i;
-
-    uint32_t bytes = d_wheel_size < c_size ? d_wheel_size : c_size;
-    for (uint32_t j = 0; j < bytes;) {
-        composite[start_i++] = d_wheel[j++];
+    for (uint32_t i = global_idx; i < composite_size; i += stride) {
+        uint32_t wheel_idx = i % d_wheel_size;
+        composite[i] = d_wheel[wheel_idx];
     }
 }
 
@@ -434,7 +426,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
         {
             D = config.d;
             K_mod_d = mpz_fdiv_ui(K, D);
-            d_wheel_bytes = 3 * (4*D);
+            d_wheel_bytes = (4*D);
             if (GRID_SIZE * d_wheel_bytes > config.m_inc) {
                 printf("\td_wheel_bits only tiles a few times!\n");
             }
@@ -461,12 +453,12 @@ GPUSieve::~GPUSieve() {
     printf("GPUSieve Timings\n");
     printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
             d_total, number_sieves, 1000 * d_total / number_sieves);
-    printf("\twheel1 : %4.1f seconds (%4.1f%%)\n", d_w1, 100.0 * d_w1 / d_total);
-    printf("\twheel2 : %4.1f seconds (%4.1f%%)\n", d_w2, 100.0 * d_w2 / d_total);
-    printf("\tsmall  : %4.1f seconds (%4.1f%%)\n", d_k1, 100.0 * d_k1 / d_total);
-    printf("\tmedium : %4.1f seconds (%4.1f%%)\n", d_k2, 100.0 * d_k2 / d_total);
-    printf("\tlarge  : %4.1f seconds (%4.1f%%)\n", d_k3, 100.0 * d_k3 / d_total);
-    printf("\tcopy   : %4.1f seconds (%4.1f%%)\n", d_copy, 100.0 * d_copy / d_total);
+    printf("\twheel1 : %5.2f seconds (%4.1f%%)\n", d_w1, 100.0 * d_w1 / d_total);
+    printf("\twheel2 : %5.2f seconds (%4.1f%%)\n", d_w2, 100.0 * d_w2 / d_total);
+    printf("\tsmall  : %5.2f seconds (%4.1f%%)\n", d_k1, 100.0 * d_k1 / d_total);
+    printf("\tmedium : %5.2f seconds (%4.1f%%)\n", d_k2, 100.0 * d_k2 / d_total);
+    printf("\tlarge  : %5.2f seconds (%4.1f%%)\n", d_k3, 100.0 * d_k3 / d_total);
+    printf("\tcopy   : %5.2f seconds (%4.1f%%)\n", d_copy, 100.0 * d_copy / d_total);
     printf("\n");
 
     CUDA_CHECK(cudaFreeHost(host_thread_stats));
@@ -504,17 +496,11 @@ uint8_t* GPUSieve::run(
             for (uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d)
                 host_wheel[i] = 1;
         }
-
-        CUDA_CHECK(cudaMemcpyAsync(D_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
-        uint32_t needed_blocks = ((BITS - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
-        if (number_sieves == 0 && verbose >= 1) {
-            size_t wheeled = std::count(host_wheel.begin(), host_wheel.end(), 1);
-            printf("\tLaunching wheel_kernel<<<%u,%u>>> (removes %lu/%lu)\n",
-                    needed_blocks, BLOCK_SIZE, wheeled, d_wheel_bytes);
-        }
-
+        CUDA_CHECK(cudaMemcpyAsync(this->D_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
+        cudaStreamSynchronize(runner);
         auto W1 = high_resolution_clock::now();
-        wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
+
+        wheel_kernel<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
             this->d_wheel_bytes,
             this->D_wheel,
             BITS,
