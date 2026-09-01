@@ -151,10 +151,12 @@ void TestData::print_stats() {
             gpu_stats.d_wait_not_active, 100 * gpu_stats.d_wait_not_active / total_t,
             gpu_stats.wait_not_active);
     printf("\t---------------------------------------\n");
-    printf("\tlooping         : %.1f seconds (%.1f%%)\n",
-            gpu_stats.d_loop, 100 * gpu_stats.d_loop / total_t);
-    printf("\tlocking         : %.1f seconds (%.1f%%)\n",
-            gpu_stats.d_lock, 100 * gpu_stats.d_lock / total_t);
+    if (gpu_stats.d_loop > 1)
+        printf("\tlooping         : %.1f seconds (%.1f%%)\n",
+                gpu_stats.d_loop, 100 * gpu_stats.d_loop / total_t);
+    if (gpu_stats.d_lock > 1)
+        printf("\tlocking         : %.1f seconds (%.1f%%)\n",
+                gpu_stats.d_lock, 100 * gpu_stats.d_lock / total_t);
     printf("\tfilling batches : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_fill, 100 * gpu_stats.d_fill / total_t);
     printf("\trunning on gpu  : %.1f seconds (%.1f%%)\n",
@@ -163,8 +165,10 @@ void TestData::print_stats() {
             gpu_stats.d_misc, 100 * gpu_stats.d_misc / total_t);
     printf("\tresults         : %.1f seconds (%.1f%%)\n",
             gpu_stats.d_results, 100 * gpu_stats.d_results / total_t);
-    printf("\twait done       : %.1f seconds (%.1f%%)\n",
-            gpu_stats.d_done, 100 * gpu_stats.d_done / total_t);
+    printf("\twait done X     : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_done_x, 100 * gpu_stats.d_done_x / total_t);
+    printf("\twait done M     : %.1f seconds (%.1f%%)\n",
+            gpu_stats.d_done_m, 100 * gpu_stats.d_done_m / total_t);
     printf("\n");
     setlocale(LC_NUMERIC, "C");
 }
@@ -408,7 +412,7 @@ static int32_t _invert(int32_t a, int32_t p) {
 
 
 static
-void run_sieve_thread(void) {
+void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
     try {
         pthread_setname_np(pthread_self(), "SIEVE_THREAD");
         std::ignore = nice(-2); // Increase priority a bit
@@ -463,10 +467,12 @@ void run_sieve_thread(void) {
 
         assert(sieve_data);
         const auto m_inc = config.m_inc;
-        const auto M_INC_HALF = m_inc / 2;
 
+#if CPU_SIEVE
+        const auto M_INC_HALF = m_inc / 2;
         // Need to be able to write to composites[m_inc] as sentinel
         vector<uint32_t> composites(M_INC_HALF / 32 + 2, 0);
+#endif  // CPU_SIEVE
 
         uint64_t D = config.d;
         assert( 16 * D % 32 == 0);
@@ -482,6 +488,9 @@ void run_sieve_thread(void) {
         double finalize_time = 0;
 
         uint64_t max_p_i = p_and_neg_inverse_k.size();
+
+        setup_done = 1;
+        setup_done.notify_all();
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
@@ -1137,14 +1146,6 @@ void prime_gap_test(struct Config config) {
 
     sieve_data = std::make_unique<SieveData>(config);
 
-    // This has output that's nicer close to the top.
-    std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
-    usleep(50'000); // 50ms
-
-    // This calls GPUSieve which takes a few seconds to build prime list
-    std::thread testing_thread{run_testing_thread, config};
-    usleep(1'000'000);
-
     // Setup
     {
         sieve_mtx.lock();
@@ -1161,7 +1162,18 @@ void prime_gap_test(struct Config config) {
 
         sieve_mtx.unlock();
     }
-    std::thread sieve_thread(run_sieve_thread);
+    std::atomic<uint8_t> setup_done{0};
+    std::thread sieve_thread(run_sieve_thread, std::ref(setup_done));
+    // May take a few seconds for GPUSieve to build up prime lists
+    setup_done.wait(0);
+    if (config.verbose >= 3)
+        printf("Setup Done!\n");
+
+    // This has output that's nicer close to the top.
+    std::thread overflow_thread{run_overflow_coordinator_thread, std::ref(config)};
+    usleep(10'000); // 50ms
+
+    std::thread testing_thread{run_testing_thread, config};
 
     while (is_running && stop_queue <= 1) {
         usleep(50'000); // 50ms

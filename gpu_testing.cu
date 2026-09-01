@@ -230,7 +230,9 @@ void run_gpu_thread(int runner_num, int verbose,
         mpz_init_set(K, K_in);
         mpz_init(t);
 
-        batch.just_paused = true;
+        bool just_paused = true;
+        bool new_m = true;
+        uint64_t last_m = 0;
         batch.results_end = high_resolution_clock::now();
 
 #ifdef GPU_TESTING
@@ -249,6 +251,7 @@ void run_gpu_thread(int runner_num, int verbose,
 
             assert( batch.state == GPUBatch::EMPTY );
             auto last_result_end = batch.results_end;
+
             { // Fill Batch logic
                 batch.lock_start = high_resolution_clock::now();
                 test_data.lock();
@@ -265,7 +268,7 @@ void run_gpu_thread(int runner_num, int verbose,
                     // If last prime was just recently found prime
                     assert( test_data.test_i == test_data.unknown_m_i.size() );
                     batch.state = GPUBatch::WAITING;
-                    batch.just_paused = true;
+                    just_paused = true;
                     // batch.unlock()
                     test_data.active_batches -= 1;
                     if (test_data.active_batches == 0) {
@@ -289,6 +292,9 @@ void run_gpu_thread(int runner_num, int verbose,
                     mpz_mul_ui(t, K, m);
                     mpz_add_ui(*batch.z[i], t, x);
                 }
+
+                new_m = m_start > last_m;
+                last_m = m_start;
             }
 
             // Verify all active items are all at the front of the batch.
@@ -339,26 +345,33 @@ void run_gpu_thread(int runner_num, int verbose,
                 batch.stats.total_prp_tests += batch.i;
                 batch.stats.total_primes += batch.primes_in_batch;
 
-                double ms_wait = duration<double>(batch.lock_start - last_result_end).count();
-                double ms_lock = duration<double>(batch.fill_start - batch.lock_start).count();
-                double ms_fill = duration<double>(batch.fill_end - batch.fill_start).count();
-                double ms_misc = duration<double>(batch.gpu_start - batch.fill_end).count();
-                double ms_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
-                double ms_results = duration<double>(batch.results_end - batch.gpu_end).count();
+                double t_wait = duration<double>(batch.lock_start - last_result_end).count();
+                double t_lock = duration<double>(batch.fill_start - batch.lock_start).count();
+                double t_fill = duration<double>(batch.fill_end - batch.fill_start).count();
+                double t_misc = duration<double>(batch.gpu_start - batch.fill_end).count();
+                double t_run = duration<double>(batch.gpu_end - batch.gpu_start).count();
+                double t_results = duration<double>(batch.results_end - batch.gpu_end).count();
 
                 batch.stats.batches_run += 1;
                 batch.stats.batches_partial += (batch.i < GPU_BATCH_SIZE);
-                if (batch.just_paused) {
-                    batch.stats.d_done += ms_wait;
-                    batch.just_paused = false;
+                if (just_paused) {
+                    // Happens at the end of each X (as we wait for other batches to finish)
+                    // AND for the first X of each m
+                    //printf("Paused for %.4f seconds @ new_m: %d, m=%lu x=%u\n",
+                    //        t_wait, new_m, test_data.m_start, test_data.testing_x);
+                    if (new_m)
+                        batch.stats.d_done_m += t_wait;
+                    else
+                        batch.stats.d_done_x += t_wait;
+                    just_paused = false;
                 } else {
-                    batch.stats.d_loop += ms_wait;
+                    batch.stats.d_loop += t_wait;
                 }
-                batch.stats.d_lock += ms_lock;
-                batch.stats.d_fill += ms_fill;
-                batch.stats.d_misc += ms_misc;
-                batch.stats.d_run += ms_run;
-                batch.stats.d_results += ms_results;
+                batch.stats.d_lock += t_lock;
+                batch.stats.d_fill += t_fill;
+                batch.stats.d_misc += t_misc;
+                batch.stats.d_run += t_run;
+                batch.stats.d_results += t_results;
 
                 if (verbose >= 4) {
                     test_data.lock();
@@ -367,7 +380,7 @@ void run_gpu_thread(int runner_num, int verbose,
                             "%u running %lu/%lu tested\n",
                             runner_num, batch.stats.batches_run,
                             batch.primes_in_batch,
-                            ms_wait, ms_lock, ms_fill, ms_misc, ms_run, ms_results,
+                            t_wait, t_lock, t_fill, t_misc, t_run, t_results,
                             test_data.running_batches.load() - 1, // -1 for us.
                             test_data.test_i, test_data.unknown_m_i.size());
                     test_data.unlock();

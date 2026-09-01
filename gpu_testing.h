@@ -42,7 +42,6 @@ class GPUBatch {
         time_point<high_resolution_clock> gpu_start;
         time_point<high_resolution_clock> gpu_end;
         time_point<high_resolution_clock> results_end;
-        bool just_paused = true;
 
         // current index.
         size_t i;

@@ -102,7 +102,8 @@ class GpuStatsCounters {
         double d_misc = 0.0;
         double d_run = 0.0;
         double d_results = 0.0;
-        double d_done = 0.0;
+        double d_done_x = 0.0;
+        double d_done_m = 0.0;
 
         void reset() {
             total_prp_tests = 0;
@@ -120,7 +121,8 @@ class GpuStatsCounters {
             d_misc = 0.0;
             d_run = 0.0;
             d_results = 0.0;
-            d_done = 0.0;
+            d_done_x = 0.0;
+            d_done_m = 0.0;
         }
 
         void merge(GpuStatsCounters other) {
@@ -136,7 +138,8 @@ class GpuStatsCounters {
             d_misc            += other.d_misc;
             d_run             += other.d_run;
             d_results         += other.d_results;
-            d_done            += other.d_done;
+            d_done_x          += other.d_done_x;
+            d_done_m          += other.d_done_m;
         }
 };
 
