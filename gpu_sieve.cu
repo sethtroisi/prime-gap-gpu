@@ -300,7 +300,10 @@ __global__ void large_primes_kernal(
         mi_0 += (mi_0 & 1) ? 0 : prime;
         mi_0 >>= 1;
 
-        // TODO benchmark with unconditional set (of some know composite value)
+        /**
+         * Potentially optimization to uncondiontally set mi_0 or M_INC_HALF
+         * Didn't change benchmarking this is also only 7-20% of execution time
+         */
         if (mi_0 < M_INC_HALF) {
             composite[mi_0] = true;
             small_factors += 1;
@@ -450,7 +453,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
         cudaStreamSynchronize(runner);
         auto T1 = high_resolution_clock::now();
         auto gpu_setup_ms = duration_cast<milliseconds>(T1 - T0).count();
-        printf("\tGPU<<<%d,%d>>> setup: %lu ms\n", GRID_SIZE, BLOCK_SIZE, gpu_setup_ms);
+        printf("\tGPU<<<%d, %d>>> setup: %lu ms\n", GRID_SIZE, BLOCK_SIZE, gpu_setup_ms);
     }
 }
 
@@ -458,7 +461,8 @@ GPUSieve::~GPUSieve() {
     printf("GPUSieve Timings\n");
     printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
             d_total, number_sieves, 1000 * d_total / number_sieves);
-    printf("\twheel  : %4.1f seconds (%4.1f%%)\n", d_wheel, 100.0 * d_wheel / d_total);
+    printf("\twheel1 : %4.1f seconds (%4.1f%%)\n", d_w1, 100.0 * d_w1 / d_total);
+    printf("\twheel2 : %4.1f seconds (%4.1f%%)\n", d_w2, 100.0 * d_w2 / d_total);
     printf("\tsmall  : %4.1f seconds (%4.1f%%)\n", d_k1, 100.0 * d_k1 / d_total);
     printf("\tmedium : %4.1f seconds (%4.1f%%)\n", d_k2, 100.0 * d_k2 / d_total);
     printf("\tlarge  : %4.1f seconds (%4.1f%%)\n", d_k3, 100.0 * d_k3 / d_total);
@@ -485,41 +489,38 @@ uint8_t* GPUSieve::run(
 
     assert(m_inc % 2 == 0);
     uint32_t BITS = m_inc / 2;
-    double wheel_d, small_d, medium_d, large_d, total_d;
+    double w1_d, w2_d, small_d, medium_d, large_d, total_d;
 
     auto t_sieve_start = high_resolution_clock::now();
     { // Run GPU Sieve!
-        if (1) {
-            std::fill(host_wheel.begin(), host_wheel.end(), 0);
-            for (const auto& [d, neg_inv_K] : this->d_neg_inv_K) {
-                if (d == 2) continue;
+        std::fill(host_wheel.begin(), host_wheel.end(), 0);
+        for (const auto& [d, neg_inv_K] : this->d_neg_inv_K) {
+            if (d == 2) continue;
 
-                uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
-                mi_0 += (mi_0 & 1) ? 0 : d;
-                assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
+            uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
+            mi_0 += (mi_0 & 1) ? 0 : d;
+            assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
 
-                for (uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d)
-                    host_wheel[i] = 1;
-            }
-
-            CUDA_CHECK(cudaMemcpyAsync(D_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
-            uint32_t needed_blocks = ((BITS - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
-            if (number_sieves == 0 && verbose >= 1) {
-                size_t wheeled = std::count(host_wheel.begin(), host_wheel.end(), 1);
-                printf("\tLaunching wheel_kernel<<<%u,%u>>> (removes %lu/%lu)\n",
-                        needed_blocks, BLOCK_SIZE, wheeled, d_wheel_bytes);
-            }
-
-            wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
-                this->d_wheel_bytes,
-                this->D_wheel,
-                BITS,
-                this->composite
-            );
-            cudaStreamSynchronize(runner);
-        } else {
-            CUDA_CHECK(cudaMemsetAsync(composite, 0, composite_bytes, runner));
+            for (uint32_t i = (mi_0 >> 1); i < d_wheel_bytes; i += d)
+                host_wheel[i] = 1;
         }
+
+        CUDA_CHECK(cudaMemcpyAsync(D_wheel, host_wheel.data(), d_wheel_bytes, cudaMemcpyHostToDevice, runner));
+        uint32_t needed_blocks = ((BITS - 1) / d_wheel_bytes + 1 - 1) / BLOCK_SIZE + 1;
+        if (number_sieves == 0 && verbose >= 1) {
+            size_t wheeled = std::count(host_wheel.begin(), host_wheel.end(), 1);
+            printf("\tLaunching wheel_kernel<<<%u,%u>>> (removes %lu/%lu)\n",
+                    needed_blocks, BLOCK_SIZE, wheeled, d_wheel_bytes);
+        }
+
+        auto W1 = high_resolution_clock::now();
+        wheel_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
+            this->d_wheel_bytes,
+            this->D_wheel,
+            BITS,
+            this->composite
+        );
+        cudaStreamSynchronize(runner);
 
         auto T1 = high_resolution_clock::now();
 
@@ -568,12 +569,11 @@ uint8_t* GPUSieve::run(
         //printf("Running small to %u, medium to %u, large to %u\n",
         //        this->num_small_primes-1, medium_i-1, large_i-1);
 
-        // Maybe implement the skip division test
-
         cudaStreamSynchronize(runner);
         auto T4 = high_resolution_clock::now();
 
-        wheel_d  = duration<double>(T1 - t_sieve_start).count();
+        w1_d  = duration<double>(W1 - t_sieve_start).count();
+        w2_d  = duration<double>(T1 - W1).count();
         small_d  = duration<double>(T2 - T1).count();
         medium_d = duration<double>(T3 - T2).count();
         large_d  = duration<double>(T4 - T3).count();
@@ -625,7 +625,8 @@ uint8_t* GPUSieve::run(
 
         number_sieves += 1;
         d_total += total_d;
-        d_wheel += wheel_d;
+        d_w1    += w1_d;
+        d_w2    += w2_d;
         d_k1    += small_d;
         d_k2    += medium_d;
         d_k3    += large_d;
@@ -641,9 +642,9 @@ uint8_t* GPUSieve::run(
             for (uint32_t mi = 0; mi < (BITS + 7) / 8; mi++) {
                 num_composite += __builtin_popcount(host_composite[mi]);
             }
-            printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, %.4f, copy-back: %.4f  "
+            printf("\tGPU sieve %.3f | wheel: %.4f, %.4f, kernels: %.4f, %.4f, %.4f, copy-back: %.4f  "
                     "| %u/%u composite\n",
-                    total_d, wheel_d, small_d, medium_d, large_d, copy_d, num_composite, BITS);
+                    total_d, w1_d, w2_d, small_d, medium_d, large_d, copy_d, num_composite, BITS);
         }
     }
 

@@ -43,7 +43,8 @@ class GPUSieve {
         uint64_t number_sieves = 0;
         // Timing
         double   d_total = 0.0;
-        double   d_wheel = 0.0;
+        double   d_w1    = 0.0;
+        double   d_w2    = 0.0;
         double   d_k1    = 0.0;
         double   d_k2    = 0.0;
         double   d_k3    = 0.0;

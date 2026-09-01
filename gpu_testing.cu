@@ -41,6 +41,7 @@
 #include "miller_rabin.h"
 #endif // GPU_TESTING
 
+
 using std::vector;
 using namespace std::chrono;
 
