@@ -16,16 +16,16 @@ OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gpu_testing.o gpu_sieve.o overflow.o xoroshiro128plus.o
 OUT	= gap_search_gpu
 CC	= g++
-CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native
+CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto
 NVCC	= nvcc
 ARCH    = sm_89
 CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
-		  -Xcompiler -Wall \
-	          -Xcompiler -Werror
+		  -Xcompiler -Wall,-Werror,-mtune=native
+
 
 BITS    = 1024
 
-LDFLAGS	= -lgmp -lprimesieve -lcudart
+LDFLAGS	= -lgmp -lprimesieve -lcudart -flto=auto
 # Need for local gmp / primesieve
 #LDFLAGS+= -L /usr/local/lib
 
