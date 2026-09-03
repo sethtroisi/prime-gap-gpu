@@ -121,6 +121,7 @@ class TestData {
          * -> set to 1 to lock with a check?
          */
         std::atomic<int> flag;
+
 };
 
 class SieveData {
@@ -145,11 +146,6 @@ class SieveData {
 
         size_t testing_x_i = 0;
         size_t current_testing_x = 0;
-        /**
-         * m_i values without a prime
-         * this list corresponds to numbers BEFORE current_testing_x
-         */
-        vector<uint32_t> active_m_i;
 
         size_t sieve_x_i = 0;
         size_t current_sieve_x = 0;
@@ -164,14 +160,22 @@ class SieveData {
 
         /** sieve_mtx must be held while calling all methods*/
         void setup_sieve_data(bool stop_after);
-        void increment_X();
         bool try_set_testing_data(TestData &testing);
+        void increment_X();
         void push_to_overflow_and_increment_M_range();
-
+        uint32_t num_active() const { return active_m; };
+        const vector<uint64_t>& get_active_bits() const { return active_m_i_bits; };
+        void remove_prime_bitset(vector<uint32_t> &primes);
     private:
-        vector<bool> is_m_coprime; // Needed for is_coprime_and_valid_m cache.
+        /**
+         * Bitset of odd m
+         * active_m_bits[i] -> m_start + 2*i + 1
+         * current_testing_x HAS not yet been applied
+         */
+        uint32_t active_m;
+        vector<uint64_t> active_m_i_bits;
         vector<uint32_t> K_primes;
         vector<uint32_t> D_primes;
 
-        void is_coprime_and_valid_m();
+        void setup_active_m();
 };

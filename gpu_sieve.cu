@@ -475,7 +475,7 @@ GPUSieve::~GPUSieve() {
     mpz_clear(K);
 }
 
-uint8_t* GPUSieve::run(
+uint64_t* GPUSieve::run(
         const uint64_t m_start, const uint64_t m_inc,
         const uint64_t X, const uint32_t max_p_i) {
 
@@ -598,7 +598,7 @@ uint8_t* GPUSieve::run(
             uint32_t needed_blocks = (intervals - 1) / (2*BLOCK_SIZE) + 1;
             //printf("\tcompress_kernel<<<%u, %u>>>\n", needed_blocks, 2*BLOCK_SIZE);
             compress_kernel<<<needed_blocks, block_size, 0, runner>>>(
-                    BITS, composite, composite_compressed);
+                    BITS, composite, (uint8_t*) composite_compressed);
         }
         CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_compressed, composite_bytes/8,
                    cudaMemcpyDeviceToHost, runner));

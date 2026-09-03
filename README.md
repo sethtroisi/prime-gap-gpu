@@ -99,7 +99,7 @@ These are likely set to good values
       * 10% small, 40% medium, 40% large.
       * Tried some large kernel optimizations that didn't help.
     * CPUSieve
-      * 30% spent in finalize, **would be nice to reduce**, not sure how.
+      * 40% spent in finalize, **would be nice to reduce**, not sure how.
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
     * Overflow:
        * 99% on GPU. 9K in sieve, 45K in `prev_prime`.
@@ -124,6 +124,7 @@ These are likely set to good values
   * [X] Offload overflow `probab_prime` back to the GPU
     * Sieve each m range, keep batch of these sieves
     * Make a `GPUBatch` of sieves and current index into `coprime_X`
+  * [X] Converted `active_m_i` to bitset and do bitset operations instead of pushing to vectors.
   * [ ] Understand why some X=12 have twice as many unknowns?
     * `m * K % 3` is 1 or 2; and doesn't remove any factors from `X=12`
     * When `X % 3 == 0` you end up with twice as many factors.
