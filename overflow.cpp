@@ -49,7 +49,7 @@ OverflowQueue overflow;
 
 /** Tuning Parameters */
 
-const uint32_t OVERFLOW_SIEVE_LIMIT = 200'000;
+const uint32_t OVERFLOW_SIEVE_LIMIT = 150'000;
 const bool EXTRA_CHECKS = false;
 
 /** Globals for this class */
@@ -59,13 +59,13 @@ std::mutex record_mtx;
 class OverflowMisc {
     public:
         OverflowMisc(
-                vector<uint16_t> cX,
-                vector<uint16_t> nci,
-                vector<std::pair<uint32_t, uint32_t>> panrs,
-                vector<std::pair<uint32_t, uint32_t>> panr,
+                vector<uint16_t> &cX,
+                vector<uint16_t> &nci,
+                vector<std::pair<uint32_t, uint32_t>> &panrs,
+                vector<std::pair<uint32_t, uint32_t>> &panr,
                 uint64_t d,
                 uint64_t kmd,
-                vector<uint16_t> dw) :
+                vector<uint16_t> &dw) :
             coprime_X(cX), next_coprime_index(nci),
             p_and_neg_r_small(panrs), p_and_neg_r(panr),
             D(d), K_mod_d(kmd), d_wheel(dw) {};
@@ -79,7 +79,7 @@ class OverflowMisc {
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
         uint64_t D;
-        uint64_t K_mod_d; // Should be const after setup
+        uint64_t K_mod_d;
         vector<uint16_t> d_wheel;
 } ofs;
 
@@ -118,6 +118,7 @@ void setup_overflow(const struct Config config) {
 
     uint64_t D = config.d;
     uint64_t K_mod_d = mpz_fdiv_ui(K, D);
+    assert( 1 <= K_mod_d && K_mod_d < D );
 
     vector<uint16_t> d_wheel;
     assert(D < 65000); // Not as useful otherwise
@@ -252,13 +253,17 @@ void handle_next_prime_result(
 
 /**
  * [sieve_start, sieve_start + sieve_length)
+ * If not is_positive [-sieve_start, -sieve_start - sieve_length)
  */
 static
 void sieve_interval_cpu(const uint64_t m,
+        const bool is_positive,
         const uint32_t sieve_start,
         const uint32_t sieve_length,
         vector<uint8_t> &composite,
-        TestingStats &stats) {
+        TestingStats &stats,
+        mpz_t &tmp, const mpz_t &K
+) {
 
     auto s_start_t = high_resolution_clock::now();
 
@@ -273,47 +278,116 @@ void sieve_interval_cpu(const uint64_t m,
     assert(m > ofs.p_and_neg_r.back().first);
 
     // Otherwise I need to do something different here
+    // Technically should check m * K_mod_d < 60 bits
     assert(std::log2(m) + std::log2(ofs.p_and_neg_r.back().first) < 60);
 
-    { // Tile d_wheel into composite with a possible offset
-        uint64_t wheel_start = (m * ofs.K_mod_d + sieve_start) % ofs.D;
+    uint64_t D = ofs.D;
+
+    // Tile d_wheel into composite with a possible offset
+    if (is_positive) {
+        uint64_t wheel_start = (m * ofs.K_mod_d + sieve_start) % D;
         uint32_t w_n = ofs.d_wheel.size();
+        // TODO can this be a straight lookup?
         uint32_t w_i = std::distance(
                 ofs.d_wheel.begin(),
                 std::lower_bound(ofs.d_wheel.begin(), ofs.d_wheel.end(), wheel_start));
         assert( w_i == w_n || ofs.d_wheel[w_i] >= wheel_start);
         assert( w_i == 0   || ofs.d_wheel[w_i-1] < wheel_start);
 
+        // Technically wheel_start is always odd, but we only care about even t
+        // could only use odd valued d_wheel.
         for (int32_t j = -wheel_start; j < (signed) sieve_length; ) {
             for ( ; w_i < w_n; w_i++) {
-                uint32_t t = j + ofs.d_wheel[w_i];
-                if (t > sieve_length)
+                int32_t t = j + ofs.d_wheel[w_i];
+                assert( t >= 0 );
+                if (t > (signed) sieve_length)
                     break;
                 composite[t >> 3] |= 1 << (t & 7);
             }
-            j += ofs.D;
+            j += D;
             w_i = 0;
         }
-    }
+    } else {
+        assert( sieve_start == 0);
+        uint64_t wheel_start = m * ofs.K_mod_d % D;
+        uint32_t w_n = ofs.d_wheel.size();
+        // TODO can this be a straight lookup?
+        // Looking for first number <= wheel_start
+        int32_t w_i = std::distance(
+                ofs.d_wheel.begin(),
+                std::upper_bound(ofs.d_wheel.begin(), ofs.d_wheel.end(), wheel_start));
+        assert( w_i == (signed) w_n || ofs.d_wheel[w_i+1] > wheel_start);
+        w_i -= 1;
+        assert( w_i < 0 || ofs.d_wheel[w_i] <= wheel_start);
 
-    for (const auto& [p, neg_r] : ofs.p_and_neg_r_small) {
-        // -(m * K + sieve_start) % r
-        uint64_t temp = m * neg_r - sieve_start;
-        uint64_t center_mod = temp % ((uint64_t) p);
-        center_mod += (center_mod & 1) ? p : 0;
-
-        uint32_t two_p = p << 1;
-        for (uint32_t i = center_mod; i < sieve_length; i += two_p) {
-            composite[i >> 3] |= 1 << (i & 7);
+        // composite[0] is wheel_start
+        // composite[1] is wheel_start - 1
+        for (int32_t j = wheel_start; j < (signed) sieve_length; ) {
+            for ( ; w_i >= 0; w_i--) {
+                int32_t t = j - ofs.d_wheel[w_i];
+                assert( t >= 0 );
+                if (t > (signed) sieve_length)
+                    break;
+                composite[t >> 3] |= 1 << (t & 7);
+                if (EXTRA_CHECKS) {
+                    mpz_mul_ui(tmp, K, m);
+                    mpz_sub_ui(tmp, tmp, t);
+                    mpz_t g;
+                    mpz_init(g);
+                    if ( mpz_gcd_ui(g, tmp, D) == 1) {
+                        gmp_printf("(%lu*K - %u, D) = %Zd | %lu -> %d - %u\n",
+                                m, t, g, wheel_start, j, ofs.d_wheel[w_i]);
+                    }
+                    assert( mpz_gcd_ui(g, tmp, D) > 1 );
+                    mpz_clear(g);
+                }
+            }
+            j += D;
+            w_i = w_n - 1;
         }
     }
 
-    for (const auto& [p, neg_r] : ofs.p_and_neg_r) {
-        // -(m * K + sieve_start) % r
-        uint64_t temp = m * neg_r - sieve_start;
-        uint64_t center_mod = temp % ((uint64_t) p);
-        if (center_mod < sieve_length && (center_mod & 1) == 0) {
-            composite[center_mod >> 3] |= 1 << (center_mod & 7);
+    if (is_positive) {
+        for (const auto& [p, neg_r] : ofs.p_and_neg_r_small) {
+            // -(m * K + sieve_start) % r
+            uint64_t temp = m * neg_r - sieve_start;
+            uint64_t center_mod = temp % ((uint64_t) p);
+            center_mod += (center_mod & 1) ? p : 0;
+
+            uint32_t two_p = p << 1;
+            for (uint32_t i = center_mod; i < sieve_length; i += two_p) {
+                composite[i >> 3] |= 1 << (i & 7);
+            }
+        }
+
+        for (const auto& [p, neg_r] : ofs.p_and_neg_r) {
+            // -(m * K + sieve_start) % r
+            uint64_t temp = m * neg_r - sieve_start;
+            uint64_t center_mod = temp % ((uint64_t) p);
+            if (center_mod < sieve_length && (center_mod & 1) == 0) {
+                composite[center_mod >> 3] |= 1 << (center_mod & 7);
+            }
+        }
+    } else {
+        for (const auto& [p, neg_r] : ofs.p_and_neg_r_small) {
+            // (m * K - sieve_start) % r
+            uint64_t temp = m * (p - neg_r) + sieve_start;
+            uint64_t center_mod = temp % ((uint64_t) p);
+            center_mod += (center_mod & 1) ? p : 0;
+
+            uint32_t two_p = p << 1;
+            for (uint32_t i = center_mod; i < sieve_length; i += two_p) {
+                composite[i >> 3] |= 1 << (i & 7);
+            }
+        }
+
+        for (const auto& [p, neg_r] : ofs.p_and_neg_r) {
+            // (m * K - sieve_start) % r
+            uint64_t temp = m * (p - neg_r) + sieve_start;
+            uint64_t center_mod = temp % ((uint64_t) p);
+            if (center_mod < sieve_length && (center_mod & 1) == 0) {
+                composite[center_mod >> 3] |= 1 << (center_mod & 7);
+            }
         }
     }
 
@@ -340,8 +414,8 @@ uint32_t next_prime_distance(
         assert( ofs.coprime_X[min_x_i-1] < min_x );
 
         sieve_interval_cpu(
-            m, next_possible_x, ofs.coprime_X.back() - next_possible_x + 1,
-            composite_tmp, stats);
+            m, true, next_possible_x, ofs.coprime_X.back() - next_possible_x + 1,
+            composite_tmp, stats, tmp, K);
 
         const uint32_t N = ofs.coprime_X.size();
         for (uint32_t x_i = min_x_i; x_i < N; x_i++) {
@@ -413,8 +487,9 @@ class OverflowBatch {
         size_t i = 0;
         size_t added = 0;
 
-        // m, current coprime_X index, sieve_start
-        vector<std::tuple<uint64_t, uint16_t, uint16_t>> data;
+        // m, current coprime_X index, sieve_start, next_gap
+        // if next_gap == 0, finding next_prime, if > 0 finding prev_prime
+        vector<std::tuple<uint64_t, uint16_t, uint16_t, uint16_t>> data;
         // Optimized for less handling, could be 10x smaller by changing to bitset over coprime_x.
         vector<vector<uint8_t>> composite_tmp;
 
@@ -465,7 +540,7 @@ void push_to_overflow_batch(
     mpz_add_ui(*overflow_batch.gpu_batch.z[i], center, sieve_start);
     assert( sieve_start == ofs.coprime_X[min_x_i] );
 
-    overflow_batch.data[i] = std::make_tuple(m, min_x_i, sieve_start);
+    overflow_batch.data[i] = {m, min_x_i, sieve_start, 0};
     overflow_batch.composite_tmp[i].swap(composite_tmp);
 
     double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
@@ -500,36 +575,39 @@ uint32_t run_overflow_batch(
     s_start_t = high_resolution_clock::now();
     uint32_t finished_items = 0;
     for (uint32_t i = 0; i < overflow_batch.N; i++) {
-        if (!gpu_batch.active[i])
-            continue;
-
+        assert( gpu_batch.active[i] );
         assert (gpu_batch.result[i] == 0 || gpu_batch.result[i] == 1);
-        auto [m, x_i, sieve_start] = overflow_batch.data[i];
+        auto [m, x_i, sieve_start, next_gap] = overflow_batch.data[i];
+        uint32_t prev_gap = 0;
+        auto is_next_prime = (m > 0);
+        m = is_next_prime ? m : -m;
+
+        bool remove = false;
+        bool change_to_prev = false;
+        bool process = false;
 
         if (gpu_batch.result[i] == 1) {
-            // Found nextprime for m!
-            overflow_batch.remove_entry(i);
-            finished_items++;
-            stats.tested_gpu++;
-            uint32_t next_gap = ofs.coprime_X[x_i];
+            // Found prime for m!
+            if (next_gap == 0) {
+                change_to_prev = true;
+                next_gap = ofs.coprime_X[x_i];
 
-            if (EXTRA_CHECKS) {
-                mpz_mul_ui(center, K, m);
-                mpz_add_ui(tmp, center, next_gap);
-                assert( mpz_cmp(tmp, *gpu_batch.z[i]) == 0 );
-            }
-
-            if (next_gap < MIN_GAP_TO_CONTINUE) {
-                stats.skipped_prev++;
+                if (EXTRA_CHECKS) {
+                    mpz_mul_ui(center, K, m);
+                    mpz_add_ui(tmp, center, next_gap);
+                    assert( mpz_cmp(tmp, *gpu_batch.z[i]) == 0 );
+                }
             } else {
-                mpz_mul_ui(center, K, m);
-                handle_next_prime_result(
-                    MIN_GAP_TO_CONTINUE, MIN_MERIT, K_log, P, D,
-                    K, center,
-                    m, next_gap,
-                    next_p, prev_p, tmp, tmp2, stats, record_stream);
-            }
+                remove = true;
+                process = true;
+                prev_gap = ofs.coprime_X[x_i];
 
+                if (EXTRA_CHECKS) {
+                    mpz_mul_ui(center, K, m);
+                    mpz_sub_ui(tmp, center, prev_gap);
+                    assert( mpz_cmp(tmp, *gpu_batch.z[i]) == 0 );
+                }
+            }
         } else {
             // Advance to next test see `next_prime_distance`
             uint32_t last_x = ofs.coprime_X[x_i];
@@ -540,8 +618,11 @@ uint32_t run_overflow_batch(
                 uint16_t x = ofs.coprime_X[x_i];
                 uint16_t j = x - sieve_start;
                 if ((overflow_batch.composite_tmp[i][j >> 3] & (1 << (j & 7))) == 0) {
-                    mpz_add_ui(*gpu_batch.z[i], *gpu_batch.z[i], x - last_x);
-                    mpz_add_ui(tmp, center, x);
+                    if (next_gap == 0) {
+                        mpz_add_ui(*gpu_batch.z[i], *gpu_batch.z[i], x - last_x);
+                    } else {
+                        mpz_sub_ui(*gpu_batch.z[i], *gpu_batch.z[i], x - last_x);
+                    }
                     // Write back updated x_i;
                     std::get<1>(overflow_batch.data[i]) = x_i;
                     break;
@@ -549,27 +630,83 @@ uint32_t run_overflow_batch(
             }
 
             if (x_i >= M) {
-                overflow_batch.remove_entry(i);
-                finished_items++;
                 uint32_t min_x = ofs.coprime_X.back() + 1;
 
-                auto s_start_t = high_resolution_clock::now();
-                // Fallback to mpz_nextprime when > coprime_X[-1]
-                mpz_mul_ui(center, K, m);
-                mpz_add_ui(tmp, center, min_x);
-                mpz_nextprime(tmp, tmp);
-                mpz_sub(tmp, tmp, center);
-                uint32_t next_gap = mpz_get_ui(tmp);
-                double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-                stats.d_next_prime_cpu += total_s;
-                stats.tested_cpu += 1;
+                if (next_gap == 0) {
+                    change_to_prev = true;
 
-                handle_next_prime_result(
-                    MIN_GAP_TO_CONTINUE, MIN_MERIT, K_log, P, D,
-                    K, center,
-                    m, next_gap,
-                    next_p, prev_p, tmp, tmp2, stats, record_stream);
+                    auto s_start_t = high_resolution_clock::now();
+                    // Fallback to mpz_nextprime when > coprime_X[-1]
+                    mpz_mul_ui(center, K, m);
+                    mpz_add_ui(tmp, center, min_x);
+                    mpz_nextprime(tmp, tmp);
+                    mpz_sub(tmp, tmp, center);
+
+                    next_gap = mpz_get_ui(tmp);
+                    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                    stats.d_next_prime_cpu += total_s;
+                    stats.tested_cpu += 1;
+                } else {
+                    process = true;
+                    remove = true;
+
+                    auto s_start_t = high_resolution_clock::now();
+                    // Fallback to mpz_prevprime when > coprime_X[-1]
+                    mpz_mul_ui(center, K, m);
+                    mpz_sub_ui(tmp, center, min_x);
+                    mpz_prevprime(tmp, tmp);
+                    mpz_sub(tmp, center, tmp);
+
+                    prev_gap = mpz_get_ui(tmp);
+                    double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
+                    stats.d_next_prime_cpu += total_s;
+                    stats.tested_cpu += 1;
+                }
             }
+        }
+
+        if (process) {
+            assert( remove );
+            assert( next_gap > 0 && prev_gap > 0 );
+            uint64_t gap = prev_gap + next_gap;
+            double merit = gap / (K_log + log(m));
+
+            if (EXTRA_CHECKS) {
+                mpz_mul_ui(center, K, m);
+                mpz_sub_ui(tmp, center, prev_gap);
+                assert( mpz_probab_prime_p(tmp, 20) );
+                mpz_add_ui(tmp, center, next_gap);
+                assert( mpz_probab_prime_p(tmp, 20) );
+            }
+
+            process_result(
+                MIN_MERIT, K_log, P, D, K, center,
+                m, merit, gap, prev_gap,
+                next_p, prev_p, tmp, tmp2, stats, record_stream);
+        }
+
+        if (change_to_prev) {
+            stats.tested_gpu++;
+            assert( !remove );
+            if (next_gap < MIN_GAP_TO_CONTINUE) {
+                stats.skipped_prev++;
+                remove = true;
+            } else {
+                uint32_t x_0 = ofs.coprime_X.front();
+                sieve_interval_cpu(
+                    m, false, 0, ofs.coprime_X.back() + 1,
+                    overflow_batch.composite_tmp[i], stats, tmp, K);
+
+                // Reset this range to be prev_prime search
+                overflow_batch.data[i] = {m, 0, 0, next_gap};
+                mpz_mul_ui(center, K, m);
+                mpz_sub_ui(*gpu_batch.z[i], center, x_0);
+            }
+        }
+
+        if (remove) {
+            overflow_batch.remove_entry(i);
+            finished_items++;
         }
     }
     stats.d_next_prime_gpu_misc += duration<double>(high_resolution_clock::now() - s_start_t).count();
@@ -707,8 +844,8 @@ void run_cpu_overflow_worker(const int thread_index,
             assert( min_x <= sieve_start);
 
             sieve_interval_cpu(
-                m, sieve_start, ofs.coprime_X.back() - sieve_start + 1,
-                composite_tmp, stats);
+                m, true, sieve_start, ofs.coprime_X.back() - sieve_start + 1,
+                composite_tmp, stats, tmp, K);
 
             push_to_overflow_batch(
                 overflow_batch,
@@ -717,16 +854,16 @@ void run_cpu_overflow_worker(const int thread_index,
                 composite_tmp, stats);
 
             if (overflow_batch.added == overflow_batch.N) {
-                for (size_t i = 0; i < 10; i++) {
-                    auto found = run_overflow_batch(
+                for (size_t i = 0; i < 30; i++) {
+                    auto finished = run_overflow_batch(
                             runner,
                             overflow_batch,
                             MIN_GAP_TO_CONTINUE, MIN_MERIT,
                             K_log, P, D,
                             K, center, next_p, prev_p, tmp, tmp2,
                             stats, record_stream);
-                    if (found) break;
-                    printf("GPUBatch didn't find any primes?\n");
+                    if (finished) break;
+                    printf("GPUBatch didn't fully process any numbers?\n");
                 }
             }
         }
@@ -748,14 +885,25 @@ void run_cpu_overflow_worker(const int thread_index,
                     continue;
 
                 { // Run each remaining row of GPUBatch manually
-                    auto& [m, x_i, sieve_start] = overflow_batch.data[i];
-                    uint32_t next_x = ofs.coprime_X[x_i];
-                    uint32_t min_x = next_x;
-                    run_tests_on_cpu(
-                        MIN_GAP_TO_CONTINUE, MIN_MERIT,
-                        K_log, P, D,
-                        m, min_x,
-                        K, center, next_p, prev_p, tmp, tmp2, composite_tmp, stats, record_stream);
+                    auto& [m, x_i, sieve_start, next_gap] = overflow_batch.data[i];
+                    if (next_gap == 0) {
+                        uint32_t next_x = ofs.coprime_X[x_i];
+                        uint32_t min_x = next_x;
+                        run_tests_on_cpu(
+                            MIN_GAP_TO_CONTINUE, MIN_MERIT,
+                            K_log, P, D,
+                            m, min_x,
+                            K, center, next_p, prev_p, tmp, tmp2, composite_tmp, stats, record_stream);
+                    } else {
+                        // Ignores partially computed prev_prime.
+                        mpz_mul_ui(center, K, m);
+                        handle_next_prime_result(
+                            MIN_GAP_TO_CONTINUE, MIN_MERIT,
+                            K_log, P, D,
+                            K, center,
+                            m, next_gap,
+                            next_p, prev_p, tmp, tmp2, stats, record_stream);
+                    }
                 }
                 overflow_batch.remove_entry(i);
             }

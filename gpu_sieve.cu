@@ -412,7 +412,8 @@ GPUSieve::GPUSieve(const struct Config& config) {
 
         composite_bytes = sizeof(char) * config.m_inc / 2 + 2;
         CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
-        CUDA_CHECK(cudaMallocAsync(&composite_compressed, composite_bytes / 8 + 1, runner));
+        // Need a few extra here because active_m_i_bits may have 1 or 2 extra.
+        CUDA_CHECK(cudaMallocAsync(&composite_compressed, composite_bytes / 8 + 24, runner));
 
         {
             CUDA_CHECK(cudaMallocHost((void**) &host_thread_stats, thread_stats_bytes));

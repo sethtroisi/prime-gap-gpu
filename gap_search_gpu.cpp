@@ -205,8 +205,7 @@ TestData::TestData(const struct Config config)
     m_inc = config.m_inc;
     verbose = config.verbose;
 
-    // Need to be able to write to entry at [config.minc >> 6]
-    found_prime_m_i.resize((m_inc/2) / 32 + 1, 0);
+    found_prime_m_i.resize((m_inc/2 + 31) / 32, 0);
     full_reset();
 }
 
@@ -449,8 +448,9 @@ void SieveData::remove_prime_bitset(vector<uint32_t> &primes) {
     }
 
     // Handle last half index if needed.
-    if (primes.size() % 2 == 0) {
-        uint32_t i = primes.size();
+    if (primes.size() % 2 == 1) {
+        uint32_t i = primes.size()-1;
+        assert( i % 2 == 0 );
         uint64_t bits = (active_m_i_bits[i >> 1] &= ~primes[i]);
         active_m += std::popcount(bits);
     }
@@ -511,6 +511,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
         uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
         (void)K_mod_d;
+        // TODO don't compute this if not CPU_SIEVE
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_d;
