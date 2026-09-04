@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright 2020 Seth Troisi
+# Copyright 2026 Seth Troisi
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -104,7 +104,7 @@ def find_possible_records(args):
 
         possible = conn.execute(
             'SELECT gapsize,merit,startprime FROM gaps WHERE'
-            ' primedigits>? LIMIT 300', (digits,)).fetchall()
+            ' primedigits>? LIMIT 400', (digits,)).fetchall()
 
         i = 0
         for gap, merit, old in possible:
@@ -113,7 +113,7 @@ def find_possible_records(args):
                 continue
 
             new_merit = gap / N_log
-            if new_merit > 31.5:
+            if new_merit > 33 or i >= 50:
                 break
 
             i += 1

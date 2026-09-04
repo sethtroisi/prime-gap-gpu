@@ -91,15 +91,14 @@ These are likely set to good values
       * Don't have to track `sieve_start` per overflow
     * Cons:
       * Less dynamic flexibility
-  * On 2026/08/31 most time was spent in these places:
-    * GPU Timing: 260% running, very low waiting 4 sieve, 30% wait done.
-      * Wait done is `run_testing_thread`, `increment_X` & `push_to_overflow`.
-        * **Measured as 5s/ reset which seems like it could be optimized slightly**
+  * On 2026/09/03 most time was spent in these places:
+    * GPU Timing: 270% running, very low waiting 4 sieve, 10% misc, 15% wait done X.
+      * Wait done is waiting for other batch to finish and possibly `push_to_overflow`.
     * GPUSieve
-      * 10% small, 40% medium, 40% large.
+      * 4% wheel2, 10% small, 40% medium, 40% large, 7% copy.
       * Tried some large kernel optimizations that didn't help.
     * CPUSieve
-      * 40% spent in finalize, **would be nice to reduce**, not sure how.
+      * 20% spent in finalize, optimized from 40% with bitset, not sure how to improve.
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
     * Overflow:
        * 99% on GPU. 9K in sieve, 45K in `prev_prime`.
