@@ -60,33 +60,36 @@ class OverflowMisc {
     public:
         OverflowMisc(
                 vector<uint16_t> &cX,
-                vector<uint16_t> &nci,
+                vector<uint16_t> &cin,
                 vector<std::pair<uint32_t, uint32_t>> &panrs,
                 vector<std::pair<uint32_t, uint32_t>> &panr,
                 uint64_t d,
                 uint64_t kmd,
-                vector<uint16_t> &dw) :
-            coprime_X(cX), next_coprime_index(nci),
+                vector<uint16_t> &dw, vector<uint16_t> &dwn) :
+            coprime_X(cX), coprime_index_next(cin),
             p_and_neg_r_small(panrs), p_and_neg_r(panr),
-            D(d), K_mod_d(kmd), d_wheel(dw) {};
+            D(d), K_mod_d(kmd),
+            d_wheel(dw), d_wheel_next(dwn) {};
 
         OverflowMisc() {};
 
         vector<uint16_t> coprime_X;
-        // coprime_X[coprime_lookup[t]] >= t
-        vector<uint16_t> next_coprime_index;
+        // coprime_X[coprime_index_next[t]] >= t
+        vector<uint16_t> coprime_index_next;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
         uint64_t D;
         uint64_t K_mod_d;
         vector<uint16_t> d_wheel;
+        // d_wheel[d_wheel_next[t]] >= t
+        vector<uint16_t> d_wheel_next;
 } ofs;
 
 
 void setup_overflow(const struct Config config) {
     vector<uint16_t> coprime_X;
-    vector<uint16_t> next_coprime_index;
+    vector<uint16_t> coprime_index_next;
     vector<std::pair<uint32_t, uint32_t>> p_and_neg_r_small;
     vector<std::pair<uint32_t, uint32_t>> p_and_neg_r;
 
@@ -104,15 +107,15 @@ void setup_overflow(const struct Config config) {
             coprime_X.push_back(x);
         }
 
-        next_coprime_index.resize(coprime_X.back() + 1, 0xFFFF);
+        coprime_index_next.resize(coprime_X.back() + 1, 0xFFFF);
         uint16_t i = 0;
         for (uint16_t x_i = 0; x_i < coprime_X.size(); x_i++) {
             for ( ; i <= coprime_X[x_i]; i++ ) {
-                next_coprime_index[i] = x_i;
+                coprime_index_next[i] = x_i;
             }
         }
-        for (i = 0; i < next_coprime_index.size(); i++) {
-            assert( coprime_X[next_coprime_index[i]] >= i );
+        for (i = 0; i < coprime_index_next.size(); i++) {
+            assert( coprime_X[coprime_index_next[i]] >= i );
         }
     }
 
@@ -121,11 +124,31 @@ void setup_overflow(const struct Config config) {
     assert( 1 <= K_mod_d && K_mod_d < D );
 
     vector<uint16_t> d_wheel;
-    assert(D < 65000); // Not as useful otherwise
-    for (uint32_t i = 1; i < D; i++) {
-        if (gcd(i, D) != 1)
-            d_wheel.push_back(i);
+    vector<uint16_t> d_wheel_next;
+    {
+        assert(D < 65000); // Not as useful otherwise
+        for (uint32_t i = 1; i < D; i++) {
+            if (gcd(i, D) != 1)
+                d_wheel.push_back(i);
+        }
+
+        // Default value is d_wheel.size();
+        // Include one extra value so mod+1 is possible
+        d_wheel_next.resize(D+1, d_wheel.size());
+
+        uint16_t i = 0;
+        for (uint16_t d_i = 0; d_i < d_wheel.size(); d_i++) {
+            for ( ; i <= d_wheel[d_i]; i++ ) {
+                d_wheel_next[i] = d_i;
+            }
+        }
+
+        for (i = 0; i < d_wheel_next.size(); i++) {
+            uint16_t d_i = d_wheel_next[i];
+            assert( d_i == d_wheel.size() || d_wheel[d_wheel_next[i]] >= i );
+        }
     }
+
 
     {
         primesieve::iterator iter;
@@ -148,9 +171,9 @@ void setup_overflow(const struct Config config) {
     }
 
     ofs = OverflowMisc{
-        coprime_X, next_coprime_index,
+        coprime_X, coprime_index_next,
         p_and_neg_r_small, p_and_neg_r,
-        D, K_mod_d, d_wheel};
+        D, K_mod_d, d_wheel, d_wheel_next};
 
     mpz_clear(K);
 }
@@ -287,10 +310,7 @@ void sieve_interval_cpu(const uint64_t m,
     if (is_positive) {
         uint64_t wheel_start = (m * ofs.K_mod_d + sieve_start) % D;
         uint32_t w_n = ofs.d_wheel.size();
-        // TODO can this be a straight lookup?
-        uint32_t w_i = std::distance(
-                ofs.d_wheel.begin(),
-                std::lower_bound(ofs.d_wheel.begin(), ofs.d_wheel.end(), wheel_start));
+        uint32_t w_i = ofs.d_wheel_next[wheel_start];
         assert( w_i == w_n || ofs.d_wheel[w_i] >= wheel_start);
         assert( w_i == 0   || ofs.d_wheel[w_i-1] < wheel_start);
 
@@ -311,11 +331,8 @@ void sieve_interval_cpu(const uint64_t m,
         assert( sieve_start == 0);
         uint64_t wheel_start = m * ofs.K_mod_d % D;
         uint32_t w_n = ofs.d_wheel.size();
-        // TODO can this be a straight lookup?
         // Looking for first number <= wheel_start
-        int32_t w_i = std::distance(
-                ofs.d_wheel.begin(),
-                std::upper_bound(ofs.d_wheel.begin(), ofs.d_wheel.end(), wheel_start));
+        int32_t w_i = ofs.d_wheel_next[wheel_start+1];
         assert( w_i == (signed) w_n || ofs.d_wheel[w_i+1] > wheel_start);
         w_i -= 1;
         assert( w_i < 0 || ofs.d_wheel[w_i] <= wheel_start);
@@ -406,7 +423,7 @@ uint32_t next_prime_distance(
     mpz_add_ui(tmp, center, min_x);
 
     if (min_x + 500 < ofs.coprime_X.back()) {
-        uint32_t min_x_i = ofs.next_coprime_index[min_x];
+        uint32_t min_x_i = ofs.coprime_index_next[min_x];
         uint32_t next_possible_x = ofs.coprime_X[min_x_i];
 
         assert( 1 <= min_x_i && min_x_i < ofs.coprime_X.size() );
@@ -839,7 +856,7 @@ void run_cpu_overflow_worker(const int thread_index,
         assert(min_x + 500 < ofs.coprime_X.back());
 
         { // Sieve and push that to overflow batch
-            uint32_t min_x_i = ofs.next_coprime_index[min_x];
+            uint32_t min_x_i = ofs.coprime_index_next[min_x];
             uint32_t sieve_start = ofs.coprime_X[min_x_i];
             assert( min_x <= sieve_start);
 
