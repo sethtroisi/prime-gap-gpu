@@ -464,6 +464,7 @@ void SieveData::remove_prime_bitset(vector<uint32_t> &primes) {
     }
 }
 
+#if CPU_SIEVE
 /**
  * Return a^-1 mod p
  * a^-1 * a mod p = 1
@@ -492,6 +493,7 @@ static int32_t _invert(int32_t a, int32_t p) {
     }
     return x + p * (x < 0);
 }
+#endif  // CPU_SIEVE
 
 
 static
@@ -509,9 +511,15 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         struct Config config = sieve_data->config;
         init_K(config, K);
 
+        assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
+        assert ( config.m_start % 2 == 0); // always start on even
+        assert ( config.m_inc % 2 == 0); // all future m_start are even
+
+        assert(sieve_data);
+        const auto m_inc = config.m_inc;
+
+#if CPU_SIEVE
         uint64_t K_mod_d = mpz_fdiv_ui(K, config.d);
-        (void)K_mod_d;
-        // TODO don't compute this if not CPU_SIEVE
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_small;
         vector<std::pair<uint32_t, uint32_t>> p_and_neg_inverse_k_d;
@@ -541,22 +549,17 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             }
         }
 
-#ifdef GPU_SIEVE
-        GPUSieve gpu_sieve(config);
-#endif // GPU_SIEVE
-
-        assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
-        assert ( config.m_start % 2 == 0); // always start on even
-        assert ( config.m_inc % 2 == 0); // all future m_start are even
-
-        assert(sieve_data);
-        const auto m_inc = config.m_inc;
-
-#if CPU_SIEVE
         const auto M_INC_HALF = m_inc / 2;
         // Need to be able to write to composites[m_inc] as sentinel
         vector<uint64_t> composites(M_INC_HALF / 64 + 1, 0);
+        uint32_t prime_count = p_and_neg_inverse_k.size();
+#else
+        uint32_t prime_count = config.max_prime / std::log(config.max_prime);
 #endif  // CPU_SIEVE
+
+#ifdef GPU_SIEVE
+        GPUSieve gpu_sieve(config);
+#endif // GPU_SIEVE
 
         uint64_t D = config.d;
         assert( 32 * D % 64 == 0);
@@ -570,10 +573,10 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         double wheel_time = 0;
         double finalize_time = 0;
 
-        uint64_t max_p_i = p_and_neg_inverse_k.size();
-
         setup_done = 1;
         setup_done.notify_all();
+
+        uint32_t max_p_i = prime_count;
 
         while (is_running && stop_queue <= 1) {
             lock.lock();
@@ -581,7 +584,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             const auto state = sieve_data->state;
             if (state == SieveData::FIRST_SIEVE) {
                 total_m += m_inc;
-                max_p_i = p_and_neg_inverse_k.size();
+                max_p_i = prime_count;
                 if (config.m_start != sieve_data->config.m_start) {
                     if (config.verbose >= 3)
                         printf("Reset GPU Sieve to 0\n");
@@ -606,8 +609,8 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 // lower max_p_i if not many sieves ready
                 if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
                     max_p_i -= max_p_i / 10;
-                    if (max_p_i < 10000)
-                        max_p_i = 10000;
+                    if (max_p_i < 78000)
+                        max_p_i = 78000;
                 }
             }
 
@@ -636,7 +639,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
             { // Handle all divisors of d at one time.
                 auto s_wheel_t = high_resolution_clock::now();
-                assert(D < config.m_inc / 100); // Do something different if not true.
+                assert(D < m_inc / 100); // Do something different if not true.
 
                 std::fill(d_wheel.begin(), d_wheel.end(), 0);
                 uint32_t d_wheel_bits = 64 * d_wheel.size();
@@ -778,8 +781,9 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 #ifdef GPU_SIEVE
             // TODO get exact prime counts to agree.
             uint64_t *gpu_composites = gpu_sieve.run(
-                    m_start, m_inc, X, max_p_i + p_and_neg_inverse_k_small.size());
-            prime = p_and_neg_inverse_k[max_p_i-1].first;
+                    m_start, m_inc, X, max_p_i);
+            prime = max_p_i == prime_count ?
+                config.max_prime : (max_p_i * std::log(max_p_i));
 #endif // GPU_SIEVE
 
 #ifdef GPU_VERIFY
