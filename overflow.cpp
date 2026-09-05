@@ -34,7 +34,6 @@
 #include <primesieve.hpp>
 
 #include "gap_common.h"
-#include "gap_stats.h"
 #include "gpu_testing.h"
 
 
@@ -55,6 +54,35 @@ const bool EXTRA_CHECKS = false;
 /** Globals for this class */
 
 std::mutex record_mtx;
+
+class TestingStats {
+    public:
+        std::atomic<uint64_t> tested = 0;
+        std::atomic<uint64_t> tested_cpu = 0;
+        std::atomic<uint64_t> tested_gpu = 0;
+
+        // Set to the largest m computed during execution
+        std::atomic<uint64_t> max_m = 0;
+
+        std::atomic<uint64_t> skipped_prev = 0;
+        std::atomic<uint64_t> tested_prev = 0;
+
+        std::atomic<uint64_t> greater_than_min_merit = 0;
+        // GAP MISMATCH where next_prime had pow(2, n-1, n) == 1
+        std::atomic<uint64_t> pseudoprimes = 0;
+        // GAP MISMATCH where ^ is NOT TRUE.
+        std::atomic<uint64_t> mismatches = 0;
+
+        std::atomic<uint64_t> spot_checked = 0;
+
+        std::atomic<double>   d_sieve{0.0};
+        std::atomic<double>   d_next_prime_cpu{0.0};
+        std::atomic<double>   d_next_prime_gpu{0.0};
+        std::atomic<double>   d_next_prime_gpu_misc{0.0};
+        std::atomic<double>   d_prev_prime_cpu{0.0};
+        std::atomic<double>   d_spot_check{0.0};
+};
+
 
 class OverflowMisc {
     public:
@@ -409,7 +437,7 @@ void sieve_interval_cpu(const uint64_t m,
     }
 
     double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
-    stats.d_next_prime_sieve += total_s;
+    stats.d_sieve += total_s;
 }
 
 static
@@ -696,6 +724,7 @@ uint32_t run_overflow_batch(
                 assert( mpz_probab_prime_p(tmp, 20) );
             }
 
+            stats.tested_prev++;
             process_result(
                 MIN_MERIT, K_log, P, D, K, center,
                 m, merit, gap, prev_gap,
@@ -758,8 +787,8 @@ void run_cpu_overflow_worker(const int thread_index,
     // 2-5x what comes in per batch
     const uint64_t overflow_too_much = og_config.m_inc * og_config.cpu_fraction;
 
-    // See THEORY.md! +2.6 is small preference for doing less prev_p.
-    const float MIN_MERIT_TO_CONTINUE = 2.6 + std::log2(MIN_MERIT * std::log(2) + 1);
+    // See THEORY.md! +1 is optimal-ish +1.XX is small preference for doing less prev_p.
+    const float MIN_MERIT_TO_CONTINUE = 1.95 + std::log2(MIN_MERIT * std::log(2) + 1);
     const float m_log = log(og_config.m_start + og_config.m_inc);
     const uint32_t MIN_GAP_TO_CONTINUE =  MIN_MERIT_TO_CONTINUE * (K_log + m_log);
 
@@ -779,6 +808,7 @@ void run_cpu_overflow_worker(const int thread_index,
     GPURunner runner{};
     OverflowBatch overflow_batch{};
     vector<uint8_t> composite_tmp;
+    uint64_t max_m = 0;
 
     while (is_running) {
         // Wait till size is not zero
@@ -847,6 +877,8 @@ void run_cpu_overflow_worker(const int thread_index,
             stats.d_spot_check += total_s;
             continue;
         }
+
+        if (m > max_m) max_m = m;
 
         assert( type == Overflow::Type::NEXT_PRIME );
         // stats.tested++ moved above.
@@ -927,11 +959,16 @@ void run_cpu_overflow_worker(const int thread_index,
         }
     }
 
+    overflow.lock();
+    stats.max_m = std::max(stats.max_m.load(), max_m);
+    overflow.unlock();
+
     mpz_clears(K, center, next_p, prev_p, tmp, tmp2, NULL);
     if (og_config.verbose >= 3) {
         usleep(thread_index * 10'000); // X0ms
         printf("\tCPU overflow(%u) done\n", thread_index);
     }
+
 }
 
 
@@ -965,20 +1002,30 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
         if (is_running)
             assert( overflow.size == 0 ); // Should be empty now
 
-        if (og_config.verbose >= 1 and stats.tested > 0) {
+        // How to get access to final m?
+        uint64_t processed_m = (stats.max_m <= og_config.m_start) ?
+            0 : count_num_m(og_config.m_start, stats.max_m - og_config.m_start, og_config.d);
+        printf("Processed M: %'lu [%lu, %lu]\n",
+                processed_m, og_config.m_start, stats.max_m.load());
+
+        uint64_t T = stats.tested;
+        if (og_config.verbose >= 1 and T > 0) {
             printf("\nCPU OVERFLOW Timing:\n");
-            printf("\ttotal tested   : %lu (%.1f%% CPU, %.1f%% GPU)\n",
-                    stats.tested.load(),
-                    100.0 * stats.tested_cpu / stats.tested,
-                    100.0 * stats.tested_gpu / stats.tested);
-            printf("\t               : \t(%lu CPU, %lu GPU)\n",
+            printf("\ttotal tested   : %lu (%.2f%% -> %.2f%% of total M)\n",
+                    T,
+                    100.0 * T / processed_m,
+                    100.0 * stats.tested_prev / processed_m);
+            printf("\t               :   (%.1f%% CPU, %.1f%% GPU)\n",
+                    100.0 * stats.tested_cpu / T,
+                    100.0 * stats.tested_gpu / T);
+            printf("\t               :   (%lu CPU, %lu GPU)\n",
                     stats.tested_cpu.load(), stats.tested_gpu.load());
             printf("\tspot checked   : %lu (%.6f secs/prob_prime test)\n",
                     stats.spot_checked.load(), stats.d_spot_check / stats.spot_checked);
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
             printf("\ttotal time     : sieve: %.1f, cpu: %.1f, gpu %.1f\n",
-                    stats.d_next_prime_sieve.load(),
+                    stats.d_sieve.load(),
                     stats.d_next_prime_cpu.load(),
                     stats.d_next_prime_gpu.load());
             printf("\t               : prev_prime (cpu): %.1f, gpu misc: %.1f\n",
@@ -986,7 +1033,7 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     stats.d_next_prime_gpu_misc.load());
 
             printf("\tnext prime test/sec sieve: %0.f, cpu: %.0f, gpu: %.0f\n",
-                    stats.tested / stats.d_next_prime_sieve,
+                    (T + stats.tested_prev) / stats.d_sieve,
                     stats.tested_cpu / stats.d_next_prime_cpu,
                     stats.tested_gpu / stats.d_next_prime_gpu);
             uint32_t large = stats.greater_than_min_merit;
@@ -997,11 +1044,17 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                             stats.pseudoprimes.load(), stats.mismatches.load());
                 }
             }
-            int32_t missing = stats.tested - stats.tested_cpu - stats.tested_gpu;
+            int32_t missing = T - stats.tested_cpu - stats.tested_gpu;
             if (missing > 0) {
-                printf("\ttests don't add up %lu != %lu + %lu, missing %d\n",
-                        stats.tested.load(), stats.tested_cpu.load(),
+                printf("\tCPU+GPU tests don't add up %lu != %lu + %lu, missing %d\n",
+                        T, stats.tested_cpu.load(),
                         stats.tested_gpu.load(), missing);
+            }
+            missing = T - stats.skipped_prev - stats.tested_prev;
+            if (missing > 0) {
+                printf("\tPrev tests don't add up %lu != %lu + %lu, missing %d\n",
+                        T, stats.skipped_prev.load(),
+                        stats.tested_prev.load(), missing);
             }
             printf("\n");
         }
