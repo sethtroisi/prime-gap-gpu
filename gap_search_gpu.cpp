@@ -570,7 +570,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         uint64_t total_unknown = 0;
         double avg_primes = 0;
         double total_time = 0;
-        double wheel_time = 0;
         double finalize_time = 0;
 
         setup_done = 1;
@@ -619,7 +618,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             lock.unlock();
 
             auto s_start_t = high_resolution_clock::now();
-            double wheel_duration_t = 0;
             const uint64_t m_start = config.m_start;
 
             assert (D % 2 == 0);
@@ -638,7 +636,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             //std::fill(composites.begin(), composites.end(), 0);
 
             { // Handle all divisors of d at one time.
-                auto s_wheel_t = high_resolution_clock::now();
                 assert(D < m_inc / 100); // Do something different if not true.
 
                 std::fill(d_wheel.begin(), d_wheel.end(), 0);
@@ -671,7 +668,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     }
                     c_i += copy;
                 }
-                wheel_duration_t = duration<double>(high_resolution_clock::now() - s_wheel_t).count();
             }
 
             if (1) {
@@ -883,7 +879,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
                 auto s_stop_t = high_resolution_clock::now();
                 finalize_duration_t = duration<double>(s_stop_t - s_start_t).count();
-                wheel_time += wheel_duration_t;
                 finalize_time += finalize_duration_t;
                 total_time += finalize_duration_t;
 
@@ -899,11 +894,11 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             if ((config.verbose + (X <= 2) + (config.m_start <= 1'000'000)) >= 3) {
 #if CPU_SIEVE
                 printf("\tSieve @X=%lu with %u/%u (%.0f%%) unknown/active last prime=%lu"
-                       " took %.3f (wheel: %.3f) + %.3f seconds\n",
+                       " took %.3f + %.3f seconds\n",
                        X, unknowns_size, active_size,
                        100.0 * unknowns_size / active_size,
                        prime,
-                       sieve_duration_t, wheel_duration_t, finalize_duration_t);
+                       sieve_duration_t, finalize_duration_t);
 #else
                 printf("\tSieve @X=%lu with %u/%u (%.0f%%) unknown/active"
                        " took %.3f + %.3f seconds\n",
@@ -932,8 +927,6 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             printf("\t---------------------------------------\n");
             printf("\ttotal time            : %.1f seconds (%.4f/sieve, %.3f secs/billion)\n",
                     total_time, total_time / total_runs, total_time / total_runs * 1e9 / m_inc);
-            printf("\twheel time    (%4.1f%%) : %.1f seconds (%.4f/sieve)\n",
-                    100 * wheel_time / total_time, wheel_time, wheel_time / total_runs);
             printf("\tfinalize time (%4.1f%%) : %.1f seconds (%.4f/sieve)\n",
                     100 * finalize_time / total_time, finalize_time, finalize_time / total_runs);
             printf("\n");

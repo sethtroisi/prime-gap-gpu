@@ -77,13 +77,6 @@ These are likely set to good values
 
 ## Upgrades
 
-  * Have `sieve_interval_cpu` do both directions, and do GPU offloading of `prev_prime`.
-    * Pros:
-      * Would free up 5+ CPU cores
-      * Allows for setting lower `min_gap_to_continue` which is 5% more optimal.
-    * Cons:
-      * This is a fixed amount of work (doesn't change with `--cpu-fraction`)
-      * Currently this is using CPU and would move that to GPU work.
   * Consider choosing a consistent X to overflow at.
     * Pros:
       * If known before hand might simplify some of the CPU overflow sieve math & tracking
@@ -91,18 +84,19 @@ These are likely set to good values
       * Don't have to track `sieve_start` per overflow
     * Cons:
       * Less dynamic flexibility
-  * On 2026/09/03 most time was spent in these places:
-    * GPU Timing: 270% running, very low waiting 4 sieve, 10% misc, 15% wait done X.
+  * On 2026/09/05 most time was spent in these places:
+    * GPU Timing: 275% running, very low waiting 4 sieve, 7% misc, 15% wait done X.
       * Wait done is waiting for other batch to finish and possibly `push_to_overflow`.
     * GPUSieve
-      * 4% wheel2, 10% small, 40% medium, 40% large, 7% copy.
+      * 4% wheel2, 7% small, 30% medium, 50% large, 8% copy.
       * Tried some large kernel optimizations that didn't help.
     * CPUSieve
-      * 20% spent in finalize, optimized from 40% with bitset, not sure how to improve.
+      * 16% spent in finalize, optimized from 40% with bitset, not sure how to improve.
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
     * Overflow:
+      * 1.8% overflow, 0.97% tested both sides
        * 99% on GPU. 9K in sieve, 45K in `prev_prime`.
-       * Requires 6 CPU workers, could go to 3 **if `prev_prime` was handled on GPU.**
+       * Using `--cpu-threads=5` but averaging like 1-2 running.
        * <1% of total prime test.
 
 ## TODO
@@ -124,7 +118,10 @@ These are likely set to good values
     * Sieve each m range, keep batch of these sieves
     * Make a `GPUBatch` of sieves and current index into `coprime_X`
   * [X] Converted `active_m_i` to bitset and do bitset operations instead of pushing to vectors.
-  * [ ] Understand why some X=12 have twice as many unknowns?
+  * [X] Sieve both next and prev primes in overflow.
+    * freed up 3+ CPU cores
+    * Allows for setting lower `min_gap_to_continue` which is ~5% more optimal.
+  * [X] Understand why some X=12 have twice as many unknowns?
     * `m * K % 3` is 1 or 2; and doesn't remove any factors from `X=12`
     * When `X % 3 == 0` you end up with twice as many factors.
     * With `X % 3 == {1, 2}` half of factors get removed by 3, (1/4 with 5, 1/6 with 7)

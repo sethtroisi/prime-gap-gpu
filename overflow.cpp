@@ -377,14 +377,10 @@ void sieve_interval_cpu(const uint64_t m,
                 if (EXTRA_CHECKS) {
                     mpz_mul_ui(tmp, K, m);
                     mpz_sub_ui(tmp, tmp, t);
-                    mpz_t g;
-                    mpz_init(g);
-                    if ( mpz_gcd_ui(g, tmp, D) == 1) {
-                        gmp_printf("(%lu*K - %u, D) = %Zd | %lu -> %d - %u\n",
-                                m, t, g, wheel_start, j, ofs.d_wheel[w_i]);
+                    if ( mpz_gcd_ui(NULL, tmp, D) == 1) {
+                        printf("(%lu*K - %u, D) = 1 | %lu -> %d - %u\n",
+                                m, t, wheel_start, j, ofs.d_wheel[w_i]);
                     }
-                    assert( mpz_gcd_ui(g, tmp, D) > 1 );
-                    mpz_clear(g);
                 }
             }
             j += D;
@@ -633,6 +629,7 @@ uint32_t run_overflow_batch(
 
         if (gpu_batch.result[i] == 1) {
             // Found prime for m!
+            stats.tested_gpu++;
             if (next_gap == 0) {
                 change_to_prev = true;
                 next_gap = ofs.coprime_X[x_i];
@@ -732,7 +729,6 @@ uint32_t run_overflow_batch(
         }
 
         if (change_to_prev) {
-            stats.tested_gpu++;
             assert( !remove );
             if (next_gap < MIN_GAP_TO_CONTINUE) {
                 stats.skipped_prev++;
@@ -1009,27 +1005,30 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                 processed_m, og_config.m_start, stats.max_m.load());
 
         uint64_t T = stats.tested;
+        uint64_t total_primes = T + stats.tested_prev;
         if (og_config.verbose >= 1 and T > 0) {
             printf("\nCPU OVERFLOW Timing:\n");
             printf("\ttotal tested   : %lu (%.2f%% -> %.2f%% of total M)\n",
                     T,
                     100.0 * T / processed_m,
                     100.0 * stats.tested_prev / processed_m);
-            printf("\t               :   (%.1f%% CPU, %.1f%% GPU)\n",
-                    100.0 * stats.tested_cpu / T,
-                    100.0 * stats.tested_gpu / T);
-            printf("\t               :   (%lu CPU, %lu GPU)\n",
-                    stats.tested_cpu.load(), stats.tested_gpu.load());
+            printf("\t               :   %lu (%.1f%%) CPU, %lu (%.1f%% GPU)\n",
+                    stats.tested_cpu.load(), 100.0 * stats.tested_cpu / total_primes,
+                    stats.tested_gpu.load(), 100.0 * stats.tested_gpu / total_primes);
             printf("\tspot checked   : %lu (%.6f secs/prob_prime test)\n",
                     stats.spot_checked.load(), stats.d_spot_check / stats.spot_checked);
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
-            printf("\ttotal time     : sieve: %.1f, cpu: %.1f, gpu %.1f\n",
+            // Might overcount a small bit
+            printf("\ttotal time     : %.1f\n",
+                    stats.d_sieve + stats.d_next_prime_cpu + stats.d_prev_prime_cpu +
+                    stats.d_next_prime_gpu + stats.d_next_prime_gpu_misc);
+            printf("\t           CPU : sieve: %.1f, next: %.1f, prev: %.1f\n",
                     stats.d_sieve.load(),
                     stats.d_next_prime_cpu.load(),
-                    stats.d_next_prime_gpu.load());
-            printf("\t               : prev_prime (cpu): %.1f, gpu misc: %.1f\n",
-                    stats.d_prev_prime_cpu.load(),
+                    stats.d_prev_prime_cpu.load());
+            printf("\t           GPU : test prime: %.1f, misc: %.1f\n",
+                    stats.d_next_prime_gpu.load(),
                     stats.d_next_prime_gpu_misc.load());
 
             printf("\tnext prime test/sec sieve: %0.f, cpu: %.0f, gpu: %.0f\n",
