@@ -61,6 +61,8 @@ class TestingStats {
         std::atomic<uint64_t> tested_cpu = 0;
         std::atomic<uint64_t> tested_gpu = 0;
 
+        std::atomic<uint64_t> gpu_total_tests = 0;
+
         // Set to the largest m computed during execution
         std::atomic<uint64_t> max_m = 0;
 
@@ -294,6 +296,7 @@ void handle_next_prime_result(
     uint64_t gap = prev_gap + next_gap;
     double merit = gap / (K_log + log(m));
     stats.d_prev_prime_cpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.tested_cpu += 1;
 
     process_result(
         min_merit, K_log, P, D, K, center,
@@ -437,12 +440,19 @@ void sieve_interval_cpu(const uint64_t m,
 }
 
 static
-uint32_t next_prime_distance(
-        const uint64_t m, const uint32_t min_x,
-        const mpz_t &K, mpz_t &center, mpz_t &tmp,
+void run_tests_on_cpu(
+        const uint32_t MIN_GAP_TO_CONTINUE, const float min_merit,
+        const double K_log, const uint32_t P, const uint32_t D,
+        const uint64_t m, const uint64_t min_x,
+        const mpz_t &K, mpz_t &center,
+        mpz_t &next_p, mpz_t &prev_p,
+        mpz_t &tmp, mpz_t &tmp2,
         vector<uint8_t> &composite_tmp,
-        TestingStats &stats) {
+        TestingStats &stats,
+        std::ofstream &record_stream) {
 
+    auto s_start_t = high_resolution_clock::now();
+    uint64_t next_gap = 0;
     mpz_mul_ui(center, K, m);
     mpz_add_ui(tmp, center, min_x);
 
@@ -465,46 +475,21 @@ uint32_t next_prime_distance(
             if ((composite_tmp[j >> 3] & (1 << (j & 7))) == 0) {
                 mpz_add_ui(tmp, center, x);
                 if (mpz_probab_prime_p(tmp, 20)) {
-                    return x;
+                    next_gap = x;
+                    break;
                 }
             }
         }
         mpz_add_ui(tmp, center, ofs.coprime_X.back());
     }
 
-    // Fallback to mpz_nextprime if very large
-    mpz_nextprime(tmp, tmp);
-    mpz_sub(tmp, tmp, center);
-    return mpz_get_ui(tmp);
-}
-
-
-static
-void run_tests_on_cpu(
-        const uint32_t MIN_GAP_TO_CONTINUE, const float min_merit,
-        const double K_log, const uint32_t P, const uint32_t D,
-        const uint64_t m, const uint64_t min_x,
-        const mpz_t &K, mpz_t &center,
-        mpz_t &next_p, mpz_t &prev_p,
-        mpz_t &tmp, mpz_t &tmp2,
-        vector<uint8_t> &composite_tmp,
-        TestingStats &stats,
-        std::ofstream &record_stream) {
-
-    auto s_start_t = high_resolution_clock::now();
-    uint64_t next_gap = 0;
-    if (0) {
-        mpz_mul_ui(center, K, m);
-        mpz_add_ui(next_p, center, min_x);
-        mpz_nextprime(next_p, next_p);
-        mpz_sub(next_p, next_p, center);
-        next_gap = mpz_get_ui(next_p);
-    } else {
-        next_gap = next_prime_distance(
-                m, min_x,
-                K, center, tmp,
-                composite_tmp, stats);
+    if (next_gap == 0) {
+        // Fallback to mpz_nextprime if very large
+        mpz_nextprime(tmp, tmp);
+        mpz_sub(tmp, tmp, center);
+        next_gap = mpz_get_ui(tmp);
     }
+
     double total_s = duration<double>(high_resolution_clock::now() - s_start_t).count();
     stats.d_next_prime_cpu += total_s;
     stats.tested_cpu += 1;
@@ -607,10 +592,13 @@ uint32_t run_overflow_batch(
     gpu_batch.i = overflow_batch.added;
     std::fill(gpu_batch.result.begin(), gpu_batch.result.end(), -1);
 
-    // Run gpu_batch on GPU.
     auto s_start_t = high_resolution_clock::now();
+
+    // Run gpu_batch on GPU.
     runner.run( gpu_batch );
+
     stats.d_next_prime_gpu += duration<double>(high_resolution_clock::now() - s_start_t).count();
+    stats.gpu_total_tests += overflow_batch.N;
 
     // Process results.
     s_start_t = high_resolution_clock::now();
@@ -1001,8 +989,10 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
         // How to get access to final m?
         uint64_t processed_m = (stats.max_m <= og_config.m_start) ?
             0 : count_num_m(og_config.m_start, stats.max_m - og_config.m_start, og_config.d);
-        printf("Processed M: %'lu [%lu, %lu]\n",
-                processed_m, og_config.m_start, stats.max_m.load());
+        if (og_config.verbose >= 4) {
+            printf("Processed M: %'lu [%lu, %lu]\n",
+                    processed_m, og_config.m_start, stats.max_m.load());
+        }
 
         uint64_t T = stats.tested;
         uint64_t total_primes = T + stats.tested_prev;
@@ -1012,14 +1002,16 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                     T,
                     100.0 * T / processed_m,
                     100.0 * stats.tested_prev / processed_m);
-            printf("\t               :   %lu (%.1f%%) CPU, %lu (%.1f%% GPU)\n",
+            printf("\t               : %lu (%.1f%%) CPU, %lu (%.1f%% GPU)\n",
                     stats.tested_cpu.load(), 100.0 * stats.tested_cpu / total_primes,
                     stats.tested_gpu.load(), 100.0 * stats.tested_gpu / total_primes);
             printf("\tspot checked   : %lu (%.6f secs/prob_prime test)\n",
                     stats.spot_checked.load(), stats.d_spot_check / stats.spot_checked);
+            printf("\tgpu tests      : %lu\n",
+                    stats.gpu_total_tests.load());
             printf("\tnext prime only: %lu, both sides: %lu\n",
                     stats.skipped_prev.load(), stats.tested_prev.load());
-            // Might overcount a small bit
+            // Might overcount a small bit from gpu_misc including other things?
             printf("\ttotal time     : %.1f\n",
                     stats.d_sieve + stats.d_next_prime_cpu + stats.d_prev_prime_cpu +
                     stats.d_next_prime_gpu + stats.d_next_prime_gpu_misc);
@@ -1043,14 +1035,14 @@ void run_overflow_coordinator_thread(const struct Config og_config) {
                             stats.pseudoprimes.load(), stats.mismatches.load());
                 }
             }
-            int32_t missing = T - stats.tested_cpu - stats.tested_gpu;
-            if (missing > 0) {
+            int32_t missing = total_primes - stats.tested_cpu - stats.tested_gpu;
+            if (missing != 0) {
                 printf("\tCPU+GPU tests don't add up %lu != %lu + %lu, missing %d\n",
                         T, stats.tested_cpu.load(),
                         stats.tested_gpu.load(), missing);
             }
             missing = T - stats.skipped_prev - stats.tested_prev;
-            if (missing > 0) {
+            if (missing != 0) {
                 printf("\tPrev tests don't add up %lu != %lu + %lu, missing %d\n",
                         T, stats.skipped_prev.load(),
                         stats.tested_prev.load(), missing);

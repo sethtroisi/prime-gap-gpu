@@ -49,6 +49,9 @@ make
 valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
 ```
 
+This has spotted many reads just past the end of `composite` and other slightly hard to size arrays.
+
+
 ## TUNING
 
   * `-p` prime (AKA `log(K)`)
@@ -95,15 +98,13 @@ These are likely set to good values
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
     * Overflow:
       * 1.8% overflow, 0.97% tested both sides
-       * 99% on GPU. 9K in sieve, 45K in `prev_prime`.
-       * Using `--cpu-threads=5` but averaging like 1-2 running.
-       * <1% of total prime test.
+      * 99% of tests on GPU, 1% on CPU
+      * 50% Sieve, 25% GPU misc, 10% GPU running
+      * Using `--cpu-threads=4` but averaging 2-3 running.
+      * ~5% of total prime test.
 
 ## TODO
 
-  * [ ] Is there a way to start overflow GPU testing only when sieving is "small"
-    * Wait till `max_p_i` is reduced, fire a signal, overflow runs till empty.
-    * This shifts work so that GPU can be more full when main testing is sparser
 
 ## TODONE
 
