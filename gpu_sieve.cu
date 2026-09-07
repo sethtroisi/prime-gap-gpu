@@ -209,13 +209,7 @@ __global__ void medium_primes_kernal(
     uint64_t t0 = clock64();
     uint32_t small_factors = 0;
 
-    // Indexing is hard for me
-    // blockIdx.x / gridDim.x
-    // threadIdx.x / blockDim.x
-    assert( gridDim.x == GRID_SIZE );
-    assert( blockDim.x == BLOCK_SIZE );
-
-    uint32_t threads = GRID_SIZE * BLOCK_SIZE;
+    uint32_t threads = gridDim.x * blockDim.x;
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     uint32_t pi_0 = thread_idx;
@@ -268,13 +262,7 @@ __global__ void large_primes_kernal(
     uint64_t t0 = clock64();
     uint32_t small_factors = 0;
 
-    // Indexing is hard for me
-    // blockIdx.x / gridDim.x
-    // threadIdx.x / blockDim.x
-    assert( gridDim.x == GRID_SIZE );
-    assert( blockDim.x == BLOCK_SIZE );
-
-    uint32_t threads = GRID_SIZE * BLOCK_SIZE;
+    uint32_t threads = gridDim.x * blockDim.x;
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     uint32_t pi_0 = thread_idx;
@@ -595,10 +583,9 @@ uint64_t* GPUSieve::run(
         // Compress byte indexed data to bit indexed data to save on transfer cost.
         {
             uint32_t intervals = (BITS - 1) / COMPRESS_BYTES_PER_THREAD + 1;
-            uint32_t block_size = 4 * BLOCK_SIZE;
-            uint32_t needed_blocks = (intervals - 1) / (2*BLOCK_SIZE) + 1;
-            //printf("\tcompress_kernel<<<%u, %u>>>\n", needed_blocks, 2*BLOCK_SIZE);
-            compress_kernel<<<needed_blocks, block_size, 0, runner>>>(
+            uint32_t needed_blocks = (intervals - 1) / BLOCK_SIZE + 1;
+            //printf("\tcompress_kernel<<<%u, %u>>>\n", needed_blocks, BLOCK_SIZE);
+            compress_kernel<<<needed_blocks, BLOCK_SIZE, 0, runner>>>(
                     BITS, composite, (uint8_t*) composite_compressed);
         }
         CUDA_CHECK(cudaMemcpyAsync(host_composite, composite_compressed, composite_bytes/8,

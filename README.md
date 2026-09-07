@@ -100,7 +100,7 @@ These are likely set to good values
       * 1.8% overflow, 0.97% tested both sides
       * 99% of tests on GPU, 1% on CPU
       * 50% Sieve, 25% GPU misc, 10% GPU running
-      * Using `--cpu-threads=4` but averaging 2-3 running.
+      * Using `--cpu-threads=3` but averaging <2 running.
       * ~5% of total prime test.
 
 ## TODO

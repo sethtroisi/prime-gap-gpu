@@ -21,9 +21,9 @@
 #include "gap_common.h"
 
 // Should be a multiple of SM (66 on 4070)
-#define GRID_SIZE (2*66)
+#define GRID_SIZE (4*66)
 // number of threads, multiple of 32
-#define BLOCK_SIZE 64
+#define BLOCK_SIZE 256
 
 class GPUSieve {
     public:
