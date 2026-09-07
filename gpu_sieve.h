@@ -59,14 +59,10 @@ class GPUSieve {
         uint32_t K_mod_d;
         size_t d_wheel_bytes;
 
-        const size_t   stats_per_thread = 4;
-        const size_t   thread_stats_bytes = sizeof(int64_t) * stats_per_thread * GRID_SIZE * BLOCK_SIZE;
         size_t host_composite_bytes;
 
         /******** GPU POINTERS ********/
         /******************************/
-        // GPU stats
-        int64_t  *thread_stats;
 
         // Both of these are `num_primes` long
         uint32_t *primes;
@@ -82,7 +78,6 @@ class GPUSieve {
 
         // Host side
         uint64_t* host_composite;
-        int64_t  *host_thread_stats;
         vector<std::pair<uint32_t, uint32_t>> d_neg_inv_K;
         vector<uint8_t> host_wheel;
 };

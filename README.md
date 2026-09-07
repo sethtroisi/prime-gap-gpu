@@ -91,8 +91,7 @@ These are likely set to good values
     * GPU Timing: 275% running, very low waiting 4 sieve, 7% misc, 15% wait done X.
       * Wait done is waiting for other batch to finish and possibly `push_to_overflow`.
     * GPUSieve
-      * 4% wheel2, 7% small, 30% medium, 50% large, 8% copy.
-      * Tried some large kernel optimizations that didn't help.
+      * 4% wheel2, 9% small, 50% medium, 25% large, 15% copy.
     * CPUSieve
       * 16% spent in finalize, optimized from 40% with bitset, not sure how to improve.
       * This is mostly CPU time but could help reduce "wait 4 sieve" and possibly "wait done"
@@ -104,6 +103,8 @@ These are likely set to good values
       * ~5% of total prime test.
 
 ## TODO
+
+  * [ ] Test not doing `tests->push_back(m_i)` at gap_search_gpu.cpp 870.
 
 
 ## TODONE

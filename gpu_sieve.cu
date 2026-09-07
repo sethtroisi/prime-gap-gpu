@@ -140,17 +140,15 @@ __global__ void compress_kernel(
 
 /** Called by host executed on device. */
 __global__ void small_primes_kernal(
-    int64_t *thread_stats,
-
     /** config section **/
     const uint64_t global_M_start,
     const uint64_t global_M_INC_HALF,
     const uint32_t X,
 
-    uint8_t *composite,
+    uint8_t __restrict__ *composite,
 
-    uint32_t *primes,
-    int32_t *neg_inv_Ks      // r^-1 mod p
+    const uint32_t __restrict__ *primes,
+    const int32_t __restrict__ *neg_inv_Ks     // r^-1 mod p
 ) {
     // Indexing is hard for me
     // blockIdx.x / gridDim.x
@@ -193,111 +191,97 @@ __global__ void small_primes_kernal(
 
 /** Called by host executed on device. */
 __global__ void medium_primes_kernal(
-    int64_t *thread_stats,
-
     /** config section **/
     const uint64_t M_start,
     const uint32_t M_INC_HALF,
     const uint64_t X,
 
-    uint8_t *composite,
+    uint8_t __restrict__ *composite,
 
-    uint32_t num_primes,
-    uint32_t *primes,
-    int32_t *neg_inv_Ks      // r^-1 mod p
+    const uint32_t num_primes,
+    const uint32_t __restrict__ *primes,
+    const int32_t __restrict__ *neg_inv_Ks     // r^-1 mod p
 ) {
-    uint64_t t0 = clock64();
-    uint32_t small_factors = 0;
-
     uint32_t threads = gridDim.x * blockDim.x;
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     uint32_t pi_0 = thread_idx;
     for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
-        const uint64_t prime = primes[pi];
+        const int64_t prime = primes[pi];
         const int64_t neg_inv_K = neg_inv_Ks[pi];
 
-        // -M_start % p
-        int64_t mi_0_shift = prime - (M_start % prime);
-        {
-            // Safe from overflow as (SL * prime + prime) < int64
-            int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
-            // benchmark as "? prime : 0" vs "* prime";
-            //mi_0 += ((mi_0 & 1) == 0) * prime;
-            mi_0 += (mi_0 & 1) ? 0 : prime;
-            mi_0 >>= 1;
+        int64_t neg_inner = M_start - X * neg_inv_K;
+        int64_t temp = neg_inner % prime;
+        int64_t mi_0 = temp <= 0 ? -temp : (prime - temp);
+        assert( 0 <= mi_0 && mi_0 < prime );
 
-            for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
-                composite[t] = true;
-                small_factors += 1;
-            }
+        // -M_start % p
+        // int64_t mi_0_shift = prime - (M_start % prime);
+        // Safe from overflow as (SL * prime + prime) < int64
+        // int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
+
+        mi_0 += (mi_0 & 1) ? 0 : prime;
+        mi_0 >>= 1;
+
+        // TODO mod 3, write, write, skip, ....
+
+        for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
+            composite[t] = true;
         }
     }
-
-    uint64_t t1 = clock64();
-
-    // 4 is stats_per_thread.
-    int index = threadIdx.x + (blockIdx.x * BLOCK_SIZE);
-    thread_stats[4 * index + 0] = t0;
-    thread_stats[4 * index + 1] = t1;
-    thread_stats[4 * index + 2] = small_factors;
-    thread_stats[4 * index + 3] = index;
 }
 
 /** Called by host executed on device. */
 __global__ void large_primes_kernal(
-    int64_t *thread_stats,
-
     /** config section **/
     const uint64_t M_start,
     const uint32_t M_INC_HALF,
     const uint64_t X,
 
-    uint8_t *composite,
+    uint8_t __restrict__ *composite,
 
-    uint32_t num_primes,
-    uint32_t *primes,
-    int32_t *neg_inv_Ks      // r^-1 mod p
+    const uint32_t num_primes,
+    const uint32_t __restrict__ *primes,
+    const int32_t __restrict__ *neg_inv_Ks     // r^-1 mod p
 ) {
-    uint64_t t0 = clock64();
-    uint32_t small_factors = 0;
-
-    uint32_t threads = gridDim.x * blockDim.x;
-    uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t threads = gridDim.x * blockDim.x;
+    const uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     uint32_t pi_0 = thread_idx;
     for (uint32_t pi = pi_0; pi < num_primes; pi += threads) {
-        const uint64_t prime = primes[pi];
+        const int64_t prime = primes[pi];
         const int64_t neg_inv_K = neg_inv_Ks[pi];
 
-        // -M_start % p
-        int64_t mi_0_shift = prime - (M_start % prime);
+        // (X * neg_inv_K - M_start) % prime
+        int64_t neg_inner = M_start - X * neg_inv_K;
+        // Negative for small M_start, requires prime by signed.
+        int64_t temp = neg_inner % prime;
+        int64_t mi_0 = temp <= 0 ? -temp : (prime - temp);
+        assert( 0 <= mi_0 && mi_0 < prime );
 
-        // Safe from overflow as (SL * prime + prime) < int64
-        int64_t mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
-        // benchmark as "? prime : 0" vs "* prime";
-        //mi_0 += ((mi_0 & 1) == 0) * prime;
+        if (0) {
+            // -M_start % p
+            int64_t mi_0_shift = prime - (M_start % prime);
+
+            // Safe from overflow as (SL * prime + prime) < int64
+            int64_t test_mi_0 = (X * neg_inv_K + mi_0_shift) % prime;
+            if ( mi_0 != test_mi_0 ) {
+                printf("Disagreement at %lu * %ld - %lu mod %lu = %ld vs %ld\n",
+                        X, neg_inv_K, M_start, prime, mi_0, test_mi_0);
+            }
+        }
+
         mi_0 += (mi_0 & 1) ? 0 : prime;
         mi_0 >>= 1;
 
         /**
-         * Potentially optimization to uncondiontally set mi_0 or M_INC_HALF
+         * Potentially optimization to unconditionally set mi_0 or M_INC_HALF
          * Didn't change benchmarking this is also only 7-20% of execution time
          */
         if (mi_0 < M_INC_HALF) {
             composite[mi_0] = true;
-            small_factors += 1;
         }
     }
-
-    uint64_t t1 = clock64();
-
-    // 4 is stats_per_thread.
-    int index = threadIdx.x + (blockIdx.x * BLOCK_SIZE);
-    thread_stats[4 * index + 0] = t0;
-    thread_stats[4 * index + 1] = t1;
-    thread_stats[4 * index + 2] = small_factors;
-    thread_stats[4 * index + 3] = index;
 }
 
 
@@ -394,6 +378,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
 
             CUDA_CHECK(cudaMallocAsync(&neg_inv_Ks, bytes, runner));
             CUDA_CHECK(cudaMemcpyAsync(neg_inv_Ks, host_neg_inv_Ks.data(), bytes, cudaMemcpyHostToDevice, runner));
+
             // After reading https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html#api-sync-behavior
             // I believe memcpyAsync is only async for GPU and CPU is sync with respect to the host.
         }
@@ -402,12 +387,6 @@ GPUSieve::GPUSieve(const struct Config& config) {
         CUDA_CHECK(cudaMallocAsync(&composite, composite_bytes, runner));
         // Need a few extra here because active_m_i_bits may have 1 or 2 extra.
         CUDA_CHECK(cudaMallocAsync(&composite_compressed, composite_bytes / 8 + 24, runner));
-
-        {
-            CUDA_CHECK(cudaMallocHost((void**) &host_thread_stats, thread_stats_bytes));
-            CUDA_CHECK(cudaMallocAsync(&thread_stats, thread_stats_bytes, runner));
-            CUDA_CHECK(cudaMemsetAsync(thread_stats, 0, thread_stats_bytes, runner));
-        }
 
         host_composite_bytes = composite_bytes;
         cudaMallocHost((void**) &host_composite, host_composite_bytes);
@@ -449,9 +428,6 @@ GPUSieve::~GPUSieve() {
     printf("\tlarge  : %5.2f seconds (%4.1f%%)\n", d_k3, 100.0 * d_k3 / d_total);
     printf("\tcopy   : %5.2f seconds (%4.1f%%)\n", d_copy, 100.0 * d_copy / d_total);
     printf("\n");
-
-    CUDA_CHECK(cudaFreeHost(host_thread_stats));
-    CUDA_CHECK(cudaFree(thread_stats));
 
     CUDA_CHECK(cudaFree(composite));
 
@@ -503,7 +479,6 @@ uint64_t* GPUSieve::run(
         num_small_primes = 2 * GRID_SIZE;
         assert( num_small_primes < this->num_primes);
         small_primes_kernal<<<num_small_primes, BLOCK_SIZE, 0, runner>>>(
-            this->thread_stats,
             m_start, BITS, X,
             this->composite,
             this->primes,
@@ -516,7 +491,6 @@ uint64_t* GPUSieve::run(
         uint32_t medium_i = std::min(this->num_medium_primes, max_p_i);
         assert( medium_i > this->num_small_primes );
         medium_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
-            this->thread_stats,
             m_start, BITS, X,
             this->composite,
             medium_i - this->num_small_primes,
@@ -532,7 +506,6 @@ uint64_t* GPUSieve::run(
         if (large_i > medium_i) {
             // Could be overlapped with medium_primes.
             large_primes_kernal<<<GRID_SIZE, BLOCK_SIZE, 0, runner>>>(
-                this->thread_stats,
                 m_start, BITS, X,
                 this->composite,
                 large_i - medium_i,
@@ -552,29 +525,6 @@ uint64_t* GPUSieve::run(
         small_d  = duration<double>(T2 - T1).count();
         medium_d = duration<double>(T3 - T2).count();
         large_d  = duration<double>(T4 - T3).count();
-    }
-
-    if (0) { // Read thread stats
-        CUDA_CHECK(cudaMemcpyAsync(host_thread_stats, thread_stats, thread_stats_bytes,
-                   cudaMemcpyDeviceToHost, runner));
-        cudaStreamSynchronize(runner);
-        auto first_t0 = host_thread_stats[0];
-        for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
-            first_t0 = std::min(first_t0, host_thread_stats[stats_per_thread * ti + 0]);
-        }
-
-        for (size_t ti = 0; ti < GRID_SIZE * BLOCK_SIZE; ti++) {
-            const auto s = host_thread_stats + (stats_per_thread * ti);
-            //auto t0 = s[0];
-            //auto t1 = s[1];
-            //auto small_factors = s[2];
-            auto verify = s[3];
-            //if (ti % 173 == 0) {
-            //    printf("\tt%-5lu | t0 offset = %-13ld | t1-t0 = %-12ld | factors: %ld\n",
-            //            ti, t0 - first_t0, t1 - t0, small_factors);
-            //}
-            assert(verify == ti);
-        }
     }
 
     if (1) { // Parse results back to composite.
