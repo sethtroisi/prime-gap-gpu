@@ -72,6 +72,8 @@ void run_benchmark_thread(const struct Config og_config) {
 
     typedef mr_params_t<THREADS_PER_INSTANCE, BITS, WINDOW_BITS> params;
     test_runner_t<params> runner(N);
+    size_t blocks = (N + runner.IPB - 1) / runner.IPB;
+    printf("<<<%lu,%d>>>\n", blocks, runner.TPB);
 
     GpuStatsCounters stats;
 
