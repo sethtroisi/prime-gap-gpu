@@ -348,6 +348,7 @@ bool SieveData::try_set_testing_data(TestData &testing) {
     assert( testing.state == TestData::WAITING );
     assert( testing.unknown_m_i.size() == 0 );
     assert( testing.running_batches == 0 );
+    assert( current_testing_x > 0 ); // 0 is the sentinal in next_sieves.
 
     // Look for finished sieve to copy over.
     for (uint32_t i = 0; i < OPEN_SIEVES; i++) {
@@ -385,6 +386,7 @@ void SieveData::increment_X() {
 
     // asserting next sieve is already done.
     testing_x_i++;
+    assert( testing_x_i < coprime_X.size() );
     current_testing_x = coprime_X[testing_x_i];
     if (config.verbose >= 3 && current_testing_x % 300 <= 1) {
         printf("\tMoving to X=%ld\n", current_testing_x);
@@ -608,9 +610,10 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 // lower max_p_i if not many sieves ready
                 if (sieve_data->sieves_ready < 2 && sieve_data->sieve_x_i > 20) {
                     max_p_i -= max_p_i / 10;
-                    if (max_p_i < 78000)
-                        max_p_i = 78000;
+                    if (max_p_i < 50000)
+                        max_p_i = 50000;
                 }
+                assert(max_p_i <= prime_count);
             }
 
             config = sieve_data->config;
@@ -633,7 +636,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
 #if CPU_SIEVE
             // Don't need fill because wheel sets (not or's)
-            //std::fill(composites.begin(), composites.end(), 0);
+            // std::fill(composites.begin(), composites.end(), 0);
 
             { // Handle all divisors of d at one time.
                 assert(D < m_inc / 100); // Do something different if not true.
@@ -648,15 +651,14 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     // Skipping these doesn't save any time and makes verification harder.
                     //if (X % d == 0) continue;
 
-                    // Need m_start % d to not overflow.
-
-                    uint64_t mi_0 = (X * neg_inv_K + d - (m_start % d)) % d;
+                    uint64_t p = d;
+                    uint64_t mi_0 = (X * neg_inv_K + p - (m_start % p)) % p;
                     mi_0 += (mi_0 & 1) ? 0 : d;
                     assert( ((m_start + mi_0) * K_mod_d + X) % d == 0 );
 
                     // mark all later multiples
                     for( uint32_t i = mi_0 >> 1; i < d_wheel_bits; i += d ) {
-                        d_wheel[i >> 6] |= 1 << (i & 63);
+                        d_wheel[i >> 6] |= 1ull << (i & 63);
                     }
                 }
 
@@ -720,7 +722,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
                     for ( uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
-                        composites[t >> 6] |= 1ul << (t & 63);
+                        composites[t >> 6] |= 1ull << (t & 63);
                     }
                 }
             }
@@ -751,7 +753,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
                     for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
-                        composites[t >> 6] |= 1 << (t & 63);
+                        composites[t >> 6] |= 1ull << (t & 63);
                     }
                 }
             } else {
@@ -768,7 +770,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     mi_0 >>= 1;
 
                     for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
-                        composites[t >> 6] |= 1 << (t & 63);
+                        composites[t >> 6] |= 1ull << (t & 63);
                     }
                 }
             }

@@ -430,9 +430,12 @@ GPUSieve::~GPUSieve() {
     printf("\n");
 
     CUDA_CHECK(cudaFree(composite));
+    CUDA_CHECK(cudaFree(composite_compressed));
 
     CUDA_CHECK(cudaFree(primes));
     CUDA_CHECK(cudaFree(neg_inv_Ks));
+
+    CUDA_CHECK(cudaFree(D_wheel));
 
     CUDA_CHECK(cudaFreeHost(host_composite));
     CUDA_CHECK(cudaStreamDestroy(runner));

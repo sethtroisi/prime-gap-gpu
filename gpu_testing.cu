@@ -189,7 +189,7 @@ class GPURunner::GPURunnerImpl {
                     assert( gpu_i + 16 <= batch.i );
                     for (size_t j = 0; j < 16; j++) {
                         if (batch.active[gpu_i + j]) {
-                            batch.result[gpu_i + j] = (rand & 7) == 0;
+                            batch.result[gpu_i + j] = (rand & 3) == 0;
                         }
                         rand >>= 3;
                     }
@@ -322,7 +322,7 @@ void run_gpu_thread(int runner_num, int verbose,
                 assert( gpu_i + 16 <= GPU_BATCH_SIZE );
                 for (size_t j = 0; j < 16; j++) {
                     if (batch.active[gpu_i + j]) {
-                        batch.result[gpu_i + j] = (rand & 7) == 0;
+                        batch.result[gpu_i + j] = (rand & 3) == 0;
                     }
                     rand >>= 3;
                 }

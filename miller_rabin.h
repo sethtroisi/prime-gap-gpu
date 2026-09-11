@@ -382,7 +382,6 @@ class test_runner_t {
           CUDA_CHECK(cudaMemcpyAsync(
               instances, gpuInstances, sizeof(instance_t) * tests.size(), cudaMemcpyDeviceToHost,
               runner_stream));
-
           CUDA_CHECK(cudaStreamSynchronize(runner_stream));
           CGBN_CHECK(report);
 
