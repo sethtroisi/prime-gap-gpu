@@ -93,8 +93,10 @@ def find_possible_records(args):
         all_m = conn.execute(
             'SELECT startprime FROM gaps WHERE startprime like ?',
             (t,)).fetchall()
+        all_m = [start[0] for start in all_m if re.search(fr'\b{P}#.*\b{D}\b', start[0])]
+        M = 10 ** 9
         if all_m:
-            M = max(int(re.match(r'[0-9]+', start[0]).group(0)) for start in all_m)
+            M = max((int(re.match(r'[0-9]+', start).group(0)) for start in all_m))
             print(f"Found {len(all_m)} records, max M={M:,}")
 
         K = gmpy2.primorial(P) // D
@@ -113,7 +115,7 @@ def find_possible_records(args):
                 continue
 
             new_merit = gap / N_log
-            if new_merit > 33 or i >= 50:
+            if new_merit > 34 or i >= 50:
                 break
 
             i += 1

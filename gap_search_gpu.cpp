@@ -108,8 +108,13 @@ int main(int argc, char* argv[]) {
             __GNU_MP_VERSION, __GNU_MP_VERSION_MINOR, __GNU_MP_VERSION_PATCHLEVEL);
     }
 
-    if (100'000 < config.max_prime && config.max_prime > 1'500'000'000) {
-        printf("\tmax_prime(%'ld) should be between 100K and 1.5B\n", config.max_prime);
+    if (config.max_prime < 2'000'000 || 1'500'000'000 < config.max_prime) {
+        printf("\tmax_prime(%'ld) should be between 2M and 1.5B\n", config.max_prime);
+        return 1;
+    }
+
+    if (config.m_inc < 2'000'000) {
+        printf("\t--minc should be at least 2 million\n");
         return 1;
     }
 

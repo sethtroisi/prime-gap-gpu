@@ -109,7 +109,6 @@ These are likely set to good values
 ## TODO
 
   * [ ] Test not doing `tests->push_back(m_i)` at gap_search_gpu.cpp 870.
-  * [ ] Over 4 days I leaked something like 30GB of RAM. I'd like to find where!
 
 
 ## TODONE
