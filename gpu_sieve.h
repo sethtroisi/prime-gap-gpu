@@ -20,8 +20,8 @@
 
 #include "gap_common.h"
 
-// Should be a multiple of SM (66 on 4070)
-#define GRID_SIZE (4*66)
+// Should be a multiple of streaming multi proccessors (66 on 4070)
+#define GRID_SIZE (4 * MP)
 // number of threads, multiple of 32
 #define BLOCK_SIZE 256
 

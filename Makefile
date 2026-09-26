@@ -22,8 +22,8 @@ ARCH    = sm_89
 CUDA_FLAGS	= $(OPT) -arch=$(ARCH) --resource-usage \
 		  -Xcompiler -Wall,-Werror,-mtune=native
 
-
 BITS    = 1024
+MP      = 66
 
 LDFLAGS	= -lgmp -lprimesieve -lcudart -flto=auto
 # Need for local gmp / primesieve
@@ -32,10 +32,10 @@ LDFLAGS	= -lgmp -lprimesieve -lcudart -flto=auto
 all: $(OUT)
 
 gpu_sieve.o: gpu_sieve.cu
-	nvcc $^ -o $@ -c $(CUDA_FLAGS)
+	$(NVCC) $^ -o $@ -DMP=$(MP) -c $(CUDA_FLAGS)
 
 gpu_testing.o: gpu_testing.cu
-	nvcc $^ -o $@ -c -DGPU_BITS=$(BITS) $(CUDA_FLAGS) -I../CGBN/include
+	$(NVCC) $^ -o $@ -c -DGPU_BITS=$(BITS) -DMP=$(MP) $(CUDA_FLAGS) -I../CGBN/include
 
 %.o: %.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
@@ -45,7 +45,7 @@ gap_search_gpu: gap_search_gpu.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 gpu_benchmark: gpu_benchmark.cu gap_common.o
-	nvcc $^ -o $@ -DGPU_BITS=$(BITS) $(CUDA_FLAGS) -I../CGBN/include -lgmp -lprimesieve -lcudart
+	$(NVCC) $^ -o $@ -DGPU_BITS=$(BITS) -DMP=$(MP) $(CUDA_FLAGS) -I../CGBN/include -lgmp -lprimesieve -lcudart
 
 .PHONY: all clean
 
