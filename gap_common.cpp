@@ -60,7 +60,8 @@ double calc_log_K(const struct Config& config) {
 void init_K(const struct Config& config, mpz_t &K) {
     mpz_init(K);
     mpz_primorial_ui(K, config.p);
-    assert(0 == mpz_tdiv_q_ui(K, K, config.d));
+    [[maybe_unused]] auto ret = mpz_tdiv_q_ui(K, K, config.d);
+    assert(ret == 0);
     assert(mpz_cmp_ui(K, 1) > 0);  // K <= 1 ?!?
 }
 

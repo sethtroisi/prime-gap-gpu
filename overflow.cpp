@@ -704,9 +704,17 @@ uint32_t run_overflow_batch(
             if (EXTRA_CHECKS) {
                 mpz_mul_ui(center, K, m);
                 mpz_sub_ui(tmp, center, prev_gap);
-                assert( mpz_probab_prime_p(tmp, 20) );
+                if (! mpz_probab_prime_p(tmp, 20) ) {
+                    assert(false); // mpz_probab_prime_p(tmp) not prime!
+                    printf("ERROR IN OVERFLOW mpz_probab_prime_p(prev)\n");
+                    exit(2);
+                }
                 mpz_add_ui(tmp, center, next_gap);
-                assert( mpz_probab_prime_p(tmp, 20) );
+                if (! mpz_probab_prime_p(tmp, 20) ) {
+                    assert(false); // mpz_probab_prime_p(tmp) not prime!
+                    printf("ERROR IN OVERFLOW mpz_probab_prime_p(prev)\n");
+                    exit(2);
+                }
             }
 
             stats.tested_prev++;
