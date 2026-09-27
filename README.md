@@ -37,7 +37,7 @@ make
 or
 
 (Not reccomeneded but here for clang-tidy maybe)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBITS=512
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMP=66 -DBITS=512
 cd build
 make
 ```

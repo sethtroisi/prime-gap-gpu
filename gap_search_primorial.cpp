@@ -320,7 +320,7 @@ void SieveData::setup_active_m() {
     const uint64_t ODDS = M_inc / 2;
     assert(M_inc < std::numeric_limits<uint32_t>::max());
 
-    const uint32_t D = config.d;
+    [[maybe_unused]] const uint32_t D = config.d;
     assert( D % 2 == 0 );
 
     // M must be coprime to D, removes all evens.
@@ -361,7 +361,7 @@ void SieveData::setup_active_m() {
 
     if (EXTRA_CHECKS) {
         for (uint32_t m_i = 1; m_i <= M_inc; m_i += 2) {
-            bool bit = (active_m_i_bits[m_i >> 7] & (1ul << ((m_i >> 1) & 63))) > 0;
+            [[maybe_unused]] bool bit = (active_m_i_bits[m_i >> 7] & (1ul << ((m_i >> 1) & 63))) > 0;
             assert( (gcd(M_start + m_i, D) == 1) == bit );
         }
     }
@@ -1073,7 +1073,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.lock();
                 test_data.lock();
 
-                uint8_t had_ready = sieve_data->sieves_ready;
+                [[maybe_unused]] uint8_t had_ready = sieve_data->sieves_ready;
                 bool set = sieve_data->try_set_testing_data(test_data);
                 if (!set) test_data.gpu_stats.wait_not_active++;
 

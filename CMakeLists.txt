@@ -29,26 +29,34 @@ include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../CGBN/include
 )
 
-add_executable(gap_search_primorial
-        gap_search_primorial.cpp
-        gap_common.cpp gap_search_common.cpp gpu_testing.cu)
+add_library(common INTERFACE)
 
-target_compile_options(gap_search_primorial
-    PRIVATE
+target_compile_options(common
+    INTERFACE
         $<$<COMPILE_LANGUAGE:CXX>:
             -Wall
             -Werror
             -Wno-vla
             -mtune=native
         >
-)
-
-target_compile_options(gap_search_primorial
-    PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
             --resource-usage
-            -Xcompiler=-Wall
-            -Xcompiler=-Werror
+            -Xcompiler=-Wall,-Werror
+            -mtune=native
             -DGPU_BITS=${BITS}
+            -DMP=${MP}
         >
 )
+
+add_executable(gap_search_primorial
+        gap_search_primorial.cpp
+                gap_common.cpp gap_search_common.cpp
+                overflow.cpp
+                xoroshiro128plus.cpp
+                gpu_sieve.cu gpu_testing.cu)
+target_link_libraries(gap_search_primorial PRIVATE common)
+
+add_executable(gpu_benchmark
+        gpu_benchmark.cu
+                gap_common.cpp)
+target_link_libraries(gpu_benchmark PRIVATE common)

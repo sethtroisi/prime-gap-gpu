@@ -174,7 +174,7 @@ void setup_overflow(const struct Config config) {
         }
 
         for (i = 0; i < d_wheel_next.size(); i++) {
-            uint16_t d_i = d_wheel_next[i];
+            [[maybe_unused]] uint16_t d_i = d_wheel_next[i];
             assert( d_i == d_wheel.size() || d_wheel[d_wheel_next[i]] >= i );
         }
     }

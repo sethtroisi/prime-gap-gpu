@@ -13,7 +13,9 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o gap_search_common.o gpu_testing.o gpu_sieve.o overflow.o xoroshiro128plus.o
+OBJS	= gap_common.o gap_search_common.o \
+	  overflow.o xoroshiro128plus.o \
+	  gpu_sieve.o gpu_testing.o
 OUT	= gap_search_primorial
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto
@@ -45,7 +47,7 @@ gap_search_primorial: gap_search_primorial.cpp $(OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 gpu_benchmark: gpu_benchmark.cu gap_common.o
-	$(NVCC) $^ -o $@ -DGPU_BITS=$(BITS) -DMP=$(MP) $(CUDA_FLAGS) -I../CGBN/include -lgmp -lprimesieve -lcudart
+	$(NVCC) $^ -o $@ -DGPU_BITS=$(BITS) -DMP=$(MP) $(CUDA_FLAGS) -I../CGBN/include -lgmp
 
 .PHONY: all clean
 

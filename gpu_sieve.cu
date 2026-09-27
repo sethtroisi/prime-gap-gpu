@@ -99,7 +99,7 @@ __global__ void compress_kernel(
     const uint8_t *composite,
     uint8_t *result
 ) {
-    uint32_t threads = gridDim.x * blockDim.x;
+    [[maybe_unused]] uint32_t threads = gridDim.x * blockDim.x;
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     const uint32_t size_per = COMPRESS_BYTES_PER_THREAD;
