@@ -20,7 +20,7 @@
 
 #include <gmp.h>
 
-#include "gap_search_primorial.h"
+#include "gap_search_common.h"
 #include "gap_stats.h"
 
 

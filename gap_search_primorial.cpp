@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "gap_search_primorial.h"
-
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -66,10 +64,34 @@ using std::endl;
 using std::vector;
 using namespace std::chrono;
 
+
+//*************************************************************************** //
+//*********************************FORWARDS********************************** //
+
+class SieveData;
+
+//*********************************FORWARDS********************************** //
+//*************************************************************************** //
+
+
+
 //*************************************************************************** //
 //**********************************GLOBALS********************************** //
 
+/** Shared state between threads in gap_search_common */
+// std::atomic<bool> is_running;
+// std::atomic<uint8_t> stop_queue{0};
 
+// Don't read from sieve_data without holding sieve_mtx
+std::mutex sieve_mtx;
+std::unique_ptr<SieveData> sieve_data;
+
+//**********************************GLOBALS********************************** //
+//*************************************************************************** //
+
+
+//*************************************************************************** //
+//*********************************CONSTANTS********************************** //
 
 /**
  * Try to have completed this many sieve ahead of the GPU
@@ -79,17 +101,7 @@ using namespace std::chrono;
  */
 const size_t OPEN_SIEVES = 4;
 
-// GLOBALS PART 1
-// more globals in part 2
-
-/** Shared state between threads */
-std::atomic<bool> is_running;
-std::atomic<uint8_t> stop_queue{0};
-
-// Don't read from sieve_data without holding sieve_mtx
-std::mutex sieve_mtx;
-std::unique_ptr<SieveData> sieve_data;
-
+//*********************************CONSTANTS********************************** //
 //*************************************************************************** //
 
 
@@ -221,6 +233,63 @@ void TestData::full_reset() {
 
     state = State::WAITING;
 }
+
+
+class SieveData {
+    public:
+        SieveData(const struct Config config);
+
+        /**
+         * NEW -> ACTIVE -> FINAL -> DONE
+         * FIRST_SIEVE => Running the first sieve
+         * FINAL => Don't sieve any more, just finish outstanding prime tests.
+         *      would be kinda nice to start on next sieves but IDK how to avoid that delay.
+         */
+        enum State { NEW, FIRST_SIEVE, ACTIVE, FINAL, DONE };
+        State state = NEW;
+
+        struct Config config;
+
+        /* Number of valid m_i for [m_start, m_start + m_inc). */
+        size_t num_valid = 0;
+
+        vector<uint32_t> coprime_X;
+
+        size_t testing_x_i = 0;
+        size_t current_testing_x = 0;
+
+        size_t sieve_x_i = 0;
+        size_t current_sieve_x = 0;
+
+        /**
+         * m values that weren't composite from sieve
+         * these values will be tested and any primes will be removed from testing_m
+         */
+        std::atomic<uint8_t> sieves_ready{0};
+        vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
+
+
+        /** sieve_mtx must be held while calling all methods*/
+        void setup_sieve_data(bool stop_after);
+        bool try_set_testing_data(TestData &testing);
+        void increment_X();
+        void push_to_overflow_and_increment_M_range();
+        uint32_t num_active() const { return active_m; };
+        const vector<uint64_t>& get_active_bits() const { return active_m_i_bits; };
+        void remove_prime_bitset(vector<uint32_t> &primes);
+    private:
+        /**
+         * Bitset of odd m
+         * active_m_bits[i] -> m_start + 2*i + 1
+         * current_testing_x HAS not yet been applied
+         */
+        uint32_t active_m;
+        vector<uint64_t> active_m_i_bits;
+        vector<uint32_t> K_primes;
+        vector<uint32_t> D_primes;
+
+        void setup_active_m();
+};
 
 
 SieveData::SieveData(const struct Config config) {

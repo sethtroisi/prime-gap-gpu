@@ -1,4 +1,4 @@
-# Copyright 2025 Seth Troisi
+# Copyright 2025-2026 Seth Troisi
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 OPT     = -O3 -std=c++20 -g
-OBJS	= gap_common.o gpu_testing.o gpu_sieve.o overflow.o xoroshiro128plus.o
+OBJS	= gap_common.o gap_search_common.o gpu_testing.o gpu_sieve.o overflow.o xoroshiro128plus.o
 OUT	= gap_search_primorial
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto

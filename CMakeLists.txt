@@ -29,7 +29,9 @@ include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../CGBN/include
 )
 
-add_executable(gap_search_primorial   gap_search_primorial.cpp gap_common.cpp gpu_testing.cu)
+add_executable(gap_search_primorial
+        gap_search_primorial.cpp
+        gap_common.cpp gap_search_common.cpp gpu_testing.cu)
 
 target_compile_options(gap_search_primorial
     PRIVATE
