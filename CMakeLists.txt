@@ -29,9 +29,9 @@ include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../CGBN/include
 )
 
-add_executable(gap_search_gpu   gap_search_gpu.cpp gap_common.cpp gpu_testing.cu)
+add_executable(gap_search_primorial   gap_search_primorial.cpp gap_common.cpp gpu_testing.cu)
 
-target_compile_options(gap_search_gpu
+target_compile_options(gap_search_primorial
     PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:
             -Wall
@@ -41,7 +41,7 @@ target_compile_options(gap_search_gpu
         >
 )
 
-target_compile_options(gap_search_gpu
+target_compile_options(gap_search_primorial
     PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
             --resource-usage

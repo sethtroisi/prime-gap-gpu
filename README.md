@@ -46,11 +46,11 @@ make
 ## Misc
 
 ```
-valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_gpu -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
+valgrind --suppressions=cuda.supp --leak-check=full ./gap_search_primorial -p 337 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25 -v -v -v
 
-compute-sanitizer --tool memcheck ./gap_search_gpu -p 151 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25
+compute-sanitizer --tool memcheck ./gap_search_primorial -p 151 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25
 
-compute-sanitizer --leak-check full ./gap_search_gpu -p 151 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25
+compute-sanitizer --leak-check full ./gap_search_primorial -p 151 -d 2310 --mstart 10000000 --minc 200000 --max-prime 1 --min-merit 25
 ```
 
 This has spotted many reads just past the end of `composite` and other slightly hard to size arrays.
@@ -108,7 +108,7 @@ These are likely set to good values
 
 ## TODO
 
-  * [ ] Test not doing `tests->push_back(m_i)` at gap_search_gpu.cpp 870.
+  * [ ] Test not doing `tests->push_back(m_i)` at gap_search_primorial.cpp 870.
 
 
 ## TODONE

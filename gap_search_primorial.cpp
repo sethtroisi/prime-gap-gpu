@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "gap_search_gpu.h"
+#include "gap_search_primorial.h"
 
 #include <algorithm>
 #include <atomic>

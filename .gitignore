@@ -1,7 +1,8 @@
 
 # Programs
-gap_search_gpu
-gap_search_gpu_old
+gap_search_primorial
+gap_search_primorial_old
+gap_search_linear
 gpu_benchmark
 *.o
 a.out

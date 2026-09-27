@@ -8,7 +8,7 @@
 
 This has five records in 2B ~5-6minutes
 ```
-make BITS=256 gap_search_gpu && ./gap_search_gpu -p 151 -d 2310 --mstart 956702000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
+make BITS=256 gap_search_primorial && ./gap_search_primorial -p 151 -d 2310 --mstart 956702000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
 ```
 
 ```
@@ -40,7 +40,7 @@ SIEVE Timings:
 ## Aug 15
 
 ```
-./gap_search_gpu -p 151 -d 2310 --mstart 683900000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
+./gap_search_primorial -p 151 -d 2310 --mstart 683900000000 --minc 120000000 --max-prime 60 --min-merit 26.5 --cpu-fraction 0.020 --cpu-threads 6 -v
 
 GPU Timings:
 	m processed    : 249,350,649 (1,395,644/sec)
@@ -66,7 +66,7 @@ SIEVE Timings:
 ```
 
 ```
-time ./gap_search_gpu -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 100 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
+time ./gap_search_primorial -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 100 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
 
 GPU Timings:
 	m processed    : 41,558,442 (186,514/sec)
@@ -96,7 +96,7 @@ SIEVE Timings:
 ## Aug 12?
 
 ```
-time ./gap_search_gpu -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 36 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
+time ./gap_search_primorial -p 337 -d 2310 --mstart 81580000000 --minc 40000000 --max-prime 36 --min-merit 26 --cpu-fraction 0.013 --cpu-threads 7
 
 GPU Timings:
 	m processed    : 33,246,754 (169,525/sec)

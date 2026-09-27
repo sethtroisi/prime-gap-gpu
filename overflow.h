@@ -25,7 +25,7 @@
 #include "gap_stats.h"
 
 
-// Defined in gap_search_gpu.cpp
+// Defined in gap_search_primorial.cpp
 extern std::atomic<bool> is_running;
 
 
