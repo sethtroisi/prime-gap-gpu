@@ -42,14 +42,14 @@
 
 #include "gap_common.h"
 #include "gap_stats.h"
-#include "gap_primorial_testing.h"
+#include "gpu_testing.h"
 #include "overflow.h"
 
 
 #define GPU_SIEVE
-//#define GPU_VERIFY
 
-#define CPU_SIEVE (!defined(GPU_SIEVE) || defined(GPU_VERIFY))
+//#define CPU_VERIFY
+#define CPU_SIEVE (!defined(GPU_SIEVE) || defined(CPU_VERIFY))
 
 #ifdef GPU_SIEVE
 #include "gpu_primorial_sieve.h"
@@ -93,14 +93,6 @@ std::unique_ptr<SieveData> sieve_data;
 //*************************************************************************** //
 //*********************************CONSTANTS********************************** //
 
-/**
- * Try to have completed this many sieve ahead of the GPU
- * Small extra cost of advance_X filtering for any recent primes
- * Big saving when X has few unknowns
- *      -> some ranges have 1/2 as many for some unknown (to seth) reason
- */
-const size_t OPEN_SIEVES = 4;
-
 //*********************************CONSTANTS********************************** //
 //*************************************************************************** //
 
@@ -108,10 +100,10 @@ const size_t OPEN_SIEVES = 4;
 void prime_gap_test(const struct Config config);
 
 int main(int argc, char* argv[]) {
-    Config config = Args::argparse(argc, argv, search_type::SEARCH_PRIMORIAL_GPU);
+    Config config = Args::argparse(argc, argv, search_type::SEARCH_LINEAR_GPU);
 
     if (config.valid == 0) {
-        Args::show_usage(argv[0], search_type::SEARCH_PRIMORIAL_GPU);
+        Args::show_usage(argv[0], search_type::SEARCH_LINEAR_GPU);
         return 1;
     }
 
@@ -125,8 +117,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (config.m_inc < 2'000'000) {
-        printf("\t--minc should be at least 2 million\n");
+    if (config.m_inc < 100'000'000) {
+        printf("\t--minc should be at least 100 million\n");
         return 1;
     }
 
@@ -250,21 +242,9 @@ class SieveData {
 
         struct Config config;
 
-        /* Number of valid m_i for [m_start, m_start + m_inc). */
-        size_t num_valid = 0;
+        size_t start_offset = 0;
+        size_t length = 0;
 
-        vector<uint32_t> coprime_X;
-
-        size_t testing_x_i = 0;
-        size_t current_testing_x = 0;
-
-        size_t sieve_x_i = 0;
-        size_t current_sieve_x = 0;
-
-        /**
-         * m values that weren't composite from sieve
-         * these values will be tested and any primes will be removed from testing_m
-         */
         std::atomic<uint8_t> sieves_ready{0};
         vector<std::pair<uint32_t, vector<uint32_t>>> next_sieves;
 
@@ -272,11 +252,7 @@ class SieveData {
         /** sieve_mtx must be held while calling all methods*/
         void setup_sieve_data(bool stop_after);
         bool try_set_testing_data(TestData &testing);
-        void increment_X();
-        void push_to_overflow_and_increment_M_range();
-        uint32_t num_active() const { return active_m; };
-        const vector<uint64_t>& get_active_bits() const { return active_m_i_bits; };
-        void remove_prime_bitset(vector<uint32_t> &primes);
+        void increment_start();
     private:
         /**
          * Bitset of odd m
@@ -858,7 +834,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 config.max_prime : (max_p_i * std::log(max_p_i));
 #endif // GPU_SIEVE
 
-#ifdef GPU_VERIFY
+#ifdef CPU_VERIFY
             {
                 uint32_t num_cpu_composite = 0;
                 for (auto c : composites) {
@@ -888,7 +864,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     exit(0);
                 }
             }
-#endif  // GPU_VERIFY
+#endif  // CPU_VERIFY
 
             auto s_stop_t = high_resolution_clock::now();
             double sieve_duration_t = duration<double>(s_stop_t - s_start_t).count();

@@ -34,7 +34,6 @@ using std::vector;
 using namespace std::chrono;
 
 
-
 uint64_t gcd(uint64_t a, uint64_t b) {
     if (b == 0) return a;
     return gcd(b, a % b);
@@ -59,9 +58,13 @@ double calc_log_K(const struct Config& config) {
 
 void init_K(const struct Config& config, mpz_t &K) {
     mpz_init(K);
-    mpz_primorial_ui(K, config.p);
-    [[maybe_unused]] auto ret = mpz_tdiv_q_ui(K, K, config.d);
-    assert(ret == 0);
+    if (config.type == search_type::SEARCH_PRIMORIAL_GPU) {
+        mpz_primorial_ui(K, config.p);
+        [[maybe_unused]] auto ret = mpz_tdiv_q_ui(K, K, config.d);
+        assert(ret == 0);
+    } else if (config.type == search_type::SEARCH_LINEAR_GPU) {
+        mpz_ui_pow_ui(K, config.p, config.d);
+    }
     assert(mpz_cmp_ui(K, 1) > 0);  // K <= 1 ?!?
 }
 
@@ -236,7 +239,7 @@ vector<uint32_t> get_coprime_X(const struct Config& config, uint32_t max_x) {
     return X;
 }
 
-void Args::show_usage(char* name, Pr program) {
+void Args::show_usage(char* name, search_type program) {
     cout << "Usage: " << name << endl;
     cout << "[REQUIRED]" << endl;
     cout << "  -p <p>" << endl;
@@ -247,10 +250,7 @@ void Args::show_usage(char* name, Pr program) {
     cout << "[OPTIONALLY]" << endl;
     cout << "  --min-merit <min_merit>" << endl;
     cout << "    only display prime gaps with merit >= min_merit" << endl;
-if (program == Pr::SEARCH_GPU) {
-    cout << "    allows for partial resume of a previous range" << endl;
-}
-if (program == Pr::SEARCH_GPU) {
+if (program == search_type::SEARCH_PRIMORIAL_GPU) {
     cout << "  --max-prime" << endl;
     cout << "    use primes <= max-prime (in millions) for checking composite" << endl;
     cout << endl;
@@ -268,7 +268,7 @@ if (program == Pr::SEARCH_GPU) {
 }
 
 
-Config Args::argparse(int argc, char* argv[], Pr program) {
+Config Args::argparse(int argc, char* argv[], search_type program) {
     // NOTE: Remember to add to getopt_long(argc, argv, OPTIONS_STRING, ...) below
     static struct option long_options[] = {
         {"p",                required_argument, 0,  'p' },

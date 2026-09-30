@@ -29,9 +29,11 @@ using std::vector;
 
 const double GAMMA = 0.577215665;
 
-/* Arg Parsing */
+enum search_type { NONE, SEARCH_PRIMORIAL_GPU, SEARCH_LINEAR_GPU };
 
 struct Config {
+    search_type type = NONE;
+
     int valid   = 0;
     uint32_t p       = 0;
     uint32_t d       = 0;
@@ -67,10 +69,8 @@ struct Config {
 class Args
 {
     public:
-        enum Pr { SEARCH_GPU };
-
-        static void show_usage(char* name, Pr program);
-        static Config argparse(int argc, char* argv[], Pr program);
+        static void show_usage(char* name, search_type program);
+        static Config argparse(int argc, char* argv[], search_type program);
 
     private:
         // Disallow creating instance

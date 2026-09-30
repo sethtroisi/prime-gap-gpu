@@ -15,9 +15,10 @@
 OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gap_search_common.o \
 	  overflow.o xoroshiro128plus.o \
-	  gap_primorial_testing.o \
-	  gpu_primorial_sieve.o gpu_testing.o
-OUT	= gap_search_primorial
+	  gpu_testing.o
+PRIMORIAL_OBJS = gap_primorial_testing.o gpu_primorial_sieve.o
+LINEAR_OBJS = gpu_primorial_sieve.o gap_primorial_testing.o
+OUT	= gap_search_linear
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto
 NVCC	= nvcc
@@ -44,7 +45,10 @@ gpu_testing.o: gpu_testing.cu
 	$(CC) -c -o $@ $< $(CFLAGS) $(DEFINES)
 
 
-gap_search_primorial: gap_search_primorial.cpp $(OBJS)
+gap_search_primorial: gap_search_primorial.cpp $(OBJS) $(PRIMORIAL_OBJS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
+gap_search_linear: gap_search_linear.cpp $(OBJS) $(LINEAR_OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 gpu_benchmark: gpu_benchmark.cu gap_common.o
