@@ -53,7 +53,8 @@ add_executable(gap_search_primorial
                 gap_common.cpp gap_search_common.cpp
                 overflow.cpp
                 xoroshiro128plus.cpp
-                gpu_sieve.cu gpu_testing.cu)
+                gap_primorial_testing.cpp
+                gpu_primorial_sieve.cu gpu_testing.cu)
 target_link_libraries(gap_search_primorial PRIVATE common)
 
 add_executable(gpu_benchmark

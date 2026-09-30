@@ -16,7 +16,7 @@ OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gap_search_common.o \
 	  overflow.o xoroshiro128plus.o \
 	  gap_primorial_testing.o \
-	  gpu_sieve.o gpu_testing.o
+	  gpu_primorial_sieve.o gpu_testing.o
 OUT	= gap_search_primorial
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto
@@ -34,7 +34,7 @@ LDFLAGS	= -lgmp -lprimesieve -lcudart -flto=auto
 
 all: $(OUT)
 
-gpu_sieve.o: gpu_sieve.cu
+gpu_primorial_sieve.o: gpu_primorial_sieve.cu
 	$(NVCC) $^ -o $@ -DMP=$(MP) -c $(CUDA_FLAGS)
 
 gpu_testing.o: gpu_testing.cu

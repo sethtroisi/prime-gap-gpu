@@ -25,14 +25,14 @@
 // number of threads, multiple of 32
 #define BLOCK_SIZE 256
 
-class GPUSieve {
+class GPUPrimorialSieve {
     public:
         // Prevent copying which would use lots of memory...
-        GPUSieve(const GPUSieve&) = delete;
-        void operator=(const GPUSieve&) = delete;
+        GPUPrimorialSieve(const GPUPrimorialSieve&) = delete;
+        void operator=(const GPUPrimorialSieve&) = delete;
 
-        GPUSieve(const struct Config& config);
-        ~GPUSieve();
+        GPUPrimorialSieve(const struct Config& config);
+        ~GPUPrimorialSieve();
 
         uint64_t* run(const uint64_t m_start, const uint64_t m_inc, const uint64_t X, const uint32_t max_p_i);
 

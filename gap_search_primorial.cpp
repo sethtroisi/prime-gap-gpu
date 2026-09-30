@@ -52,7 +52,7 @@
 #define CPU_SIEVE (!defined(GPU_SIEVE) || defined(GPU_VERIFY))
 
 #ifdef GPU_SIEVE
-#include "gpu_sieve.h"
+#include "gpu_primorial_sieve.h"
 #endif // GPU_SIEVE
 
 const bool EXTRA_CHECKS = false;
@@ -634,7 +634,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 #endif  // CPU_SIEVE
 
 #ifdef GPU_SIEVE
-        GPUSieve gpu_sieve(config);
+        GPUPrimorialSieve gpu_sieve(config);
 #endif // GPU_SIEVE
 
         uint64_t D = config.d;

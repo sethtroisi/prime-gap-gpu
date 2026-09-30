@@ -12,23 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "gpu_sieve.h"
+#include "gpu_primorial_sieve.h"
 
 #include <algorithm>
-#include <bitset>
 #include <cassert>
 #include <chrono>
 #include <clocale>
 #include <cmath>
-#include <csignal>
 #include <cstdio>
 #include <cstdint>
-#include <functional>
-#include <iostream>
-#include <map>
 #include <memory>
-#include <mutex>
-#include <sstream>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -40,11 +33,6 @@
 
 #include "gap_common.h"
 
-using std::cout;
-using std::endl;
-using std::map;
-using std::mutex;
-using std::pair;
 using std::vector;
 using namespace std::chrono;
 
@@ -316,7 +304,7 @@ int32_t invert(int32_t a, int32_t p) {
 }
 
 
-GPUSieve::GPUSieve(const struct Config& config) {
+GPUPrimorialSieve::GPUPrimorialSieve(const struct Config& config) {
     // ----- Sieve stats & Merit Stuff
     init_K(config, K);
     const double K_log = _log(K);
@@ -405,7 +393,7 @@ GPUSieve::GPUSieve(const struct Config& config) {
 
         if (config.verbose >= 1) {
             setlocale(LC_NUMERIC, "");
-            printf("\tGPUSieve(): malloced: primes: %'d, composite: %lu MB + %lu MB\n",
+            printf("\tGPUPrimorialSieve(): malloced: primes: %'d, composite: %lu MB + %lu MB\n",
                     num_primes, composite_bytes / 1024 / 1024, host_composite_bytes / 1024 / 1024);
             setlocale(LC_NUMERIC, "C");
         }
@@ -417,8 +405,8 @@ GPUSieve::GPUSieve(const struct Config& config) {
     }
 }
 
-GPUSieve::~GPUSieve() {
-    printf("GPUSieve Timings\n");
+GPUPrimorialSieve::~GPUPrimorialSieve() {
+    printf("GPUPrimorialSieve Timings\n");
     printf("\ttotal sieving time: %.1f seconds / %lu sieves = %.1f ms / sieve\n",
             d_total, number_sieves, 1000 * d_total / number_sieves);
     printf("\twheel1 : %5.2f seconds (%4.1f%%)\n", d_w1, 100.0 * d_w1 / d_total);
@@ -443,7 +431,7 @@ GPUSieve::~GPUSieve() {
     mpz_clear(K);
 }
 
-uint64_t* GPUSieve::run(
+uint64_t* GPUPrimorialSieve::run(
         const uint64_t m_start, const uint64_t m_inc,
         const uint64_t X, const uint32_t max_p_i) {
 
