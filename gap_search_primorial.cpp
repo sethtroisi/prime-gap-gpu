@@ -42,7 +42,7 @@
 
 #include "gap_common.h"
 #include "gap_stats.h"
-#include "gpu_testing.h"
+#include "gap_primorial_testing.h"
 #include "overflow.h"
 
 

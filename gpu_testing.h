@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <experimental/propagate_const>
@@ -22,6 +23,8 @@
 
 #include "gap_search_common.h"
 #include "gap_stats.h"
+
+using namespace std::chrono;
 
 
 extern const size_t GPU_BATCHES;
@@ -43,18 +46,21 @@ class GPUBatch {
         time_point<high_resolution_clock> gpu_end;
         time_point<high_resolution_clock> results_end;
 
-        // current index.
-        size_t i;
-
+        /**
+         * x, m_i aren't used by runner but are useful to have per batch
+         */
         // testing 'm * K + x'
         uint32_t x;
+        // m_i corresponding to z
+        vector<uint32_t> m_i;
+
+        // current size
+        size_t i;
 
         // number to check if prime
         vector<mpz_t*> z;
         // XXX: This is an ugly hack because you can't create mpz_t vector easily
         mpz_t *z_array;
-        // m_i corresponding to z
-        vector<uint32_t> m_i;
 
         // If z[i] should be tested
         vector<uint8_t>  active;
@@ -145,9 +151,5 @@ class GPURunner
             std::unique_ptr<GPURunnerImpl>> pImpl;
 };
 
-
-void run_gpu_thread(int runner_num, int verbose,
-                    TestData &test_data, GPUBatch& batch,
-                    const mpz_t &K_in);
 
 void gpu_state_and_checks(const mpz_t &K_in, const uint64_t m_end);

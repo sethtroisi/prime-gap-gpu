@@ -15,6 +15,7 @@
 OPT     = -O3 -std=c++20 -g
 OBJS	= gap_common.o gap_search_common.o \
 	  overflow.o xoroshiro128plus.o \
+	  gap_primorial_testing.o \
 	  gpu_sieve.o gpu_testing.o
 OUT	= gap_search_primorial
 CC	= g++

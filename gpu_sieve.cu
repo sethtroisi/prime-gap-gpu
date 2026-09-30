@@ -569,9 +569,9 @@ uint64_t* GPUSieve::run(
             for (uint32_t mi = 0; mi < (BITS + 7) / 8; mi++) {
                 num_composite += __builtin_popcount(host_composite[mi]);
             }
-            printf("\tGPU sieve %.3f | wheel: %.4f, %.4f, kernels: %.4f, %.4f, %.4f, copy-back: %.4f  "
-                    "| %u/%u composite\n",
-                    total_d, w1_d, w2_d, small_d, medium_d, large_d, copy_d, num_composite, BITS);
+            printf("\tGPU sieve %.3f | wheel: %.4f, kernels: %.4f, %.4f, %.4f, copy-back: %.4f  "
+                    "| %u composite\n",
+                    total_d, w1_d + w2_d, small_d, medium_d, large_d, copy_d, num_composite);
         }
     }
 

@@ -22,7 +22,6 @@
 #include "gap_stats.h"
 
 using std::vector;
-using namespace std::chrono;
 
 
 // GLOBALS PART 1
