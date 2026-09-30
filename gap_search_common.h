@@ -26,7 +26,6 @@ using std::vector;
 
 // GLOBALS PART 1
 
-// TODO add gap_search_common.cpp with these I guess
 /** Shared state between threads */
 extern std::atomic<bool> is_running;
 extern std::atomic<uint8_t> stop_queue;
@@ -71,9 +70,6 @@ class TestData {
 
         /* BITSET of half of m_i where a prime has been found (at any X). */
         vector<uint32_t> found_prime_m_i;
-
-        /* Used in linear search */
-        vector<uint32_t> composites;
 
         // Stats
         StatsCounters stats;
