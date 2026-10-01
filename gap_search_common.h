@@ -113,3 +113,87 @@ class TestData {
         std::atomic<int> flag;
 
 };
+
+
+// TODO consider if I can avoid uint64_t for some of these (jump can be)
+struct LinearRange {
+    // A "Range" is a fraction of the whole composite [start, end)
+    // A interval is the current gap being tested
+    uint64_t range_start = 0;
+    uint64_t range_end = 0;
+
+    // These are all half indexes (e.g. divide by two)
+    uint64_t start = 0;
+    // Can probably avoid storing this with a little work.
+    uint64_t jump = 0;
+    // Test number is: K + current
+    uint64_t current = 0;
+
+    uint8_t in_gpu_batch = 0;
+    enum class State : uint8_t { NEW, PHASE1, PHASE2, PRIME, DONE };
+    State state;
+};
+
+class LinearTestData {
+    public:
+        LinearTestData(const struct Config config);
+
+        /**
+         * WAITING -> ACTIVE -> DONE
+         *    ^                  |
+         *    |------------------v
+         */
+        enum State { WAITING, ACTIVE, DONE };
+        std::atomic<State> state = WAITING;
+
+        // From Config
+        int verbose;
+
+        // For current range
+        uint64_t offset = 0;
+        uint64_t length = 0;
+
+        mpz_t test_k;
+
+        vector<LinearRange> ranges;
+
+        vector<uint32_t> composites;
+
+        std::atomic<uint32_t> running_batches = 0;
+        std::atomic<uint32_t> active_batches = 0;
+
+        // Stats
+        StatsCounters stats;
+        GpuStatsCounters gpu_stats;
+
+        // Methods
+        void reset();
+        void setup_ranges();
+
+        /** Should hold lock during */
+        void maybe_print_stats() {
+            uint64_t c = stats.batches;
+            bool is_power_print = false;
+            for (uint64_t p = 1; p <= c; p *= 10) {
+                is_power_print |= (c == p) || (c == 2*p) || (c == 5*p);
+            }
+            if (is_power_print) {
+                print_stats();
+            }
+        }
+
+        /** Should hold lock during */
+        void print_stats();
+
+        void lock();
+        void unlock();
+        void wait_for_state_and_lock(State desired);
+
+    private:
+        // For signaling, must be owned to change state.
+        /**
+         * :wait(0) -> unlock
+         * -> set to 1 to lock with a check?
+         */
+        std::atomic<int> flag;
+};

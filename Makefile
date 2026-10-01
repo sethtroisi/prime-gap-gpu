@@ -17,7 +17,8 @@ OBJS	= gap_common.o gap_search_common.o \
 	  overflow.o xoroshiro128plus.o \
 	  gpu_testing.o
 PRIMORIAL_OBJS = gap_primorial_testing.o gpu_primorial_sieve.o
-LINEAR_OBJS = gpu_primorial_sieve.o gap_primorial_testing.o
+# TODO gpu_primorial_sieve.o
+LINEAR_OBJS = gap_linear_testing.o
 OUT	= gap_search_linear
 CC	= g++
 CFLAGS	= $(OPT) -Wall -Werror -Wno-vla -mtune=native -flto

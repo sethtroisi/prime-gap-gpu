@@ -50,7 +50,7 @@ class GPUBatch {
          * x, m_i aren't used by runner but are useful to have per batch
          */
         // testing 'm * K + x'
-        uint32_t x;
+        uint64_t x;
         // m_i corresponding to z
         vector<uint32_t> m_i;
 

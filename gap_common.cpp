@@ -164,10 +164,16 @@ double prob_prime_and_stats(const struct Config& config, mpz_t &K) {
         printf("\n");
         printf("\t%.3f%% of %d digit numbers are prime\n",
                 100 * prob_prime, K_digits);
-        printf("\tAPPROX %.1f%% of numbers tested = %.1f%% of X tested (after sieve to %luM)\n",
-                100 * unknowns_after_sieve,
-                100 * unknowns_minus_K,
-                config.max_prime / 1000000);
+        if (config.type == search_type::SEARCH_PRIMORIAL_GPU) {
+            printf("\tAPPROX %.1f%% of numbers tested = %.1f%% of X tested (after sieve to %luM)\n",
+                    100 * unknowns_after_sieve,
+                    100 * unknowns_minus_K,
+                    config.max_prime / 1000000);
+        } else if (config.type == search_type::SEARCH_LINEAR_GPU) {
+            printf("\tAPPROX %.1f%% of numbers tested (after sieve to %luM)\n",
+                    100 * unknowns_after_sieve,
+                    config.max_prime / 1000000);
+        }
         printf("\t%.3f%% of tests should be prime (%.1fx speedup)\n",
                 100 * prob_prime_after_sieve, 1 / unknowns_after_sieve);
         printf("\t~ %.1f PRP tests per m (per side)\n",
@@ -250,10 +256,12 @@ void Args::show_usage(char* name, search_type program) {
     cout << "[OPTIONALLY]" << endl;
     cout << "  --min-merit <min_merit>" << endl;
     cout << "    only display prime gaps with merit >= min_merit" << endl;
-if (program == search_type::SEARCH_PRIMORIAL_GPU) {
+if (program == search_type::SEARCH_PRIMORIAL_GPU || program == search_type::SEARCH_LINEAR_GPU) {
     cout << "  --max-prime" << endl;
     cout << "    use primes <= max-prime (in millions) for checking composite" << endl;
     cout << endl;
+}
+if (program == search_type::SEARCH_PRIMORIAL_GPU) {
     cout << "  --cpu-fraction <fraction of results to finalize on CPU>" << endl;
     cout << "  --cpu-threads <number of CPU threads for finalizing>" << endl;
 }
@@ -296,6 +304,7 @@ Config Args::argparse(int argc, char* argv[], search_type program) {
 
     Config config;
     config.valid = 1;
+    config.type = program;
 
     int option_index = 0;
     char c;
@@ -418,7 +427,7 @@ Config Args::argparse(int argc, char* argv[], search_type program) {
         }
     }
 
-    {
+    if (program != search_type::SEARCH_LINEAR_GPU) {
         // check if p is valid
         bool valid = config.p < 1'000'0000;
         for (size_t t = 2; valid && t*t <= config.p; t++) {
@@ -437,14 +446,16 @@ Config Args::argparse(int argc, char* argv[], search_type program) {
         cout << "d must be greater than 0: " << config.d << endl;
     }
 
-    if (config.cpu_fraction < .00001 || config.cpu_fraction > .1) {
-        config.valid = 0;
-        cout << "cpu-fraction must be between .00001 and .1: " << config.cpu_fraction << endl;
-    }
+    if (program != search_type::SEARCH_LINEAR_GPU) {
+        if (config.cpu_fraction < .00001 || config.cpu_fraction > .1) {
+            config.valid = 0;
+            cout << "cpu-fraction must be between .00001 and .1: " << config.cpu_fraction << endl;
+        }
 
-    if (config.cpu_threads < 1 || config.cpu_threads > 159) {
-        config.valid = 0;
-        cout << "cpu-threads must be between 1 and 159: " << config.cpu_threads << endl;
+        if (config.cpu_threads < 1 || config.cpu_threads > 159) {
+            config.valid = 0;
+            cout << "cpu-threads must be between 1 and 159: " << config.cpu_threads << endl;
+        }
     }
 
     if (config.valid == 0) {

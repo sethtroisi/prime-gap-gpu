@@ -49,8 +49,7 @@ uint32_t process_finished_batch(TestData &test_data, GPUBatch& batch) {
     uint32_t m_i = 0;
     for (size_t i = 0; i < GPU_BATCH_SIZE; i++) {
         if (!batch.active[i]) {
-            // Can probably break.
-            continue;
+            break;
         }
         // Verify GPU really did write the result
         assert (batch.result[i] == 0 || batch.result[i] == 1);

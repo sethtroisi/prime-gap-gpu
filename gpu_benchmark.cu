@@ -134,10 +134,11 @@ void run_benchmark_thread(const struct Config og_config) {
 
 
 int main(int argc, char* argv[]) {
-    Config config = Args::argparse(argc, argv, Args::Pr::SEARCH_PRIMORIAL_GPU);
+    // TODO add new search_type with less validation
+    Config config = Args::argparse(argc, argv, search_type::SEARCH_PRIMORIAL_GPU);
 
     if (config.valid == 0) {
-        Args::show_usage(argv[0], Args::Pr::SEARCH_PRIMORIAL_GPU);
+        Args::show_usage(argv[0], search_type::SEARCH_PRIMORIAL_GPU);
         return 1;
     }
 
