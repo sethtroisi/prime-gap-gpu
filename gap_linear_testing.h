@@ -14,36 +14,34 @@
 
 #pragma once
 
-#include <atomic>
 #include <cstdint>
-#include <unistd.h>
 
-#include "gap_common.h"
-#include "gap_stats.h"
-
-using std::vector;
+#include "gap_search_common.h"
+#include "gpu_testing.h"
 
 
-// GLOBALS PART 1
+// TODO consider if I can avoid uint64_t for some of these (jump can be)
+struct LinearRange {
+    // An interval is the current [offset, offset + inc]
+    // A "Range" is a fraction of the whole composite [start, end)
+    uint64_t range_start = 0;
+    uint64_t range_end = 0;
 
-/** Shared state between threads */
-extern std::atomic<bool> is_running;
-extern std::atomic<uint8_t> stop_queue;
-/**
- * is_running = false
-    stop immediately
- * stop_queue
-    * 0: everything normal
-    * 1: continue like normal till increment_m
-    * 2: stop sieve & gpu_tester
-         wait for overflow to finish
- */
+    // These are all half indexes (e.g. divide by two)
+    uint64_t start = 0;
+    // Can probably avoid storing this with a little work.
+    uint64_t jump = 0;
+    // Test number is: K + TestData.offset + current
+    uint64_t current = 0;
 
-// Overflow globals in overflow.h
+    uint8_t in_gpu_batch = 0;
+    enum State : uint8_t { NEW, PHASE1, PHASE2, PRIME, DONE };
+    State state;
+};
 
-class TestData {
+class LinearTestData {
     public:
-        TestData(const struct Config config);
+        LinearTestData(const struct Config config);
 
         /**
          * WAITING -> ACTIVE -> DONE
@@ -55,35 +53,29 @@ class TestData {
 
         // From Config
         int verbose;
-        uint32_t m_inc;
 
         // For current range
-        uint64_t m_start = 0;
-        uint32_t testing_x = 0;
+        uint64_t offset = 0;
+        uint64_t length = 0;
 
-        vector<uint32_t> unknown_m_i;
-        // all indexes < test_i have been queued in a GPUBatch
-        size_t test_i = 0;
+        mpz_t test_k;
+
+        vector<LinearRange> ranges;
+
+        vector<uint32_t> composites;
 
         std::atomic<uint32_t> running_batches = 0;
         std::atomic<uint32_t> active_batches = 0;
 
-        /* BITSET of half of m_i where a prime has been found (at any X). */
-        vector<uint32_t> found_prime_m_i;
+        std::atomic<uint32_t> active_ranges = 0;
 
         // Stats
         StatsCounters stats;
         GpuStatsCounters gpu_stats;
 
         // Methods
-        void full_reset();
-
-        void add_found_prime_m_i(const uint32_t m_i) {
-            //assert(m_i < m_inc);
-            // all m_i are even (see sieve) so shift down by 1
-            uint32_t t = m_i >> 1;
-            found_prime_m_i[t >> 5] |= 1 << (t & 31);
-        }
+        void reset();
+        void setup_ranges();
 
         /** Should hold lock during */
         void maybe_print_stats() {
@@ -111,5 +103,9 @@ class TestData {
          * -> set to 1 to lock with a check?
          */
         std::atomic<int> flag;
-
 };
+
+
+void run_gpu_thread(int runner_num, int verbose,
+                    LinearTestData &test_data, GPUBatch& batch,
+                    const mpz_t &K_in);

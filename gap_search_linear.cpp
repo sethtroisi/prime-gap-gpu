@@ -123,6 +123,11 @@ int main(int argc, char* argv[]) {
             __GNU_MP_VERSION, __GNU_MP_VERSION_MINOR, __GNU_MP_VERSION_PATCHLEVEL);
     }
 
+    if (config.p % 2 == 0 || config.d % 2 == 0) {
+        printf("\tCurrently only handling odd p^d\n");
+        return 1;
+    }
+
     if (config.max_prime < 2'000'000 || 1'500'000'000 < config.max_prime) {
         printf("\tmax_prime(%'ld) should be between 2M and 1.5B\n", config.max_prime);
         return 1;
@@ -152,61 +157,43 @@ class SieveData {
         SieveData(const struct Config config);
 
         /**
-         * NEW -> ACTIVE -> FINAL -> DONE
-         * FIRST_SIEVE => Running the first sieve
-         * FINAL => Don't sieve any more, just finish outstanding prime tests.
-         *      would be kinda nice to start on next sieves but IDK how to avoid that delay.
+         * INIT -> SIEVING -> READY -> DONE
+         *            ^         |
+         *            |----------
          */
-        enum State { NEW, FIRST_SIEVE, ACTIVE, FINAL, DONE };
-        State state = NEW;
+        enum State { INIT, SIEVING, READY, DONE };
+        std::atomic<State> state = INIT;
 
         struct Config config;
 
         size_t current_offset = 0;
         size_t length = 0;
 
-        std::atomic<uint8_t> sieves_ready{0};
-        std::pair<uint32_t, vector<uint32_t>> next_sieve;
+        //std::pair<uint32_t, vector<uint32_t>> next_sieve;
+        vector<uint32_t> sieve;
 
         /** sieve_mtx must be held while calling all methods*/
-        void setup_sieve_data(bool stop_after);
         bool try_set_testing_data(LinearTestData &testing);
-        void go_to_next_range();
 };
 
 
 SieveData::SieveData(const struct Config config) {
     this->config = config;
 
-    sieves_ready = 0;
-}
-
-/** sieve_mtx must be held while calling */
-void SieveData::setup_sieve_data(bool stop) {
-    // Verify stuff
-    assert(state == SieveData::NEW);
-
-    current_offset = 0;
-    length = 0;
-
-    sieves_ready = 0;
-    sieves_ready.notify_all();
-    next_sieve.first = 0;
-    next_sieve.second.clear();
-
-    if (stop)
-        return;
+    current_offset = config.m_start;
+    length = config.m_inc;
 
     if (config.verbose + (config.m_start <= 1) >= 3)
         printf("\nSetup, starting at offset=%lu length=%luM\n",
                 current_offset, length / 1000000);
 
-    state = SieveData::FIRST_SIEVE;
+    state = SIEVING;
 }
+
 
 /** sieve_mtx, test_data.lock() must be held while calling */
 bool SieveData::try_set_testing_data(LinearTestData &testing) {
-    if (this->state == NEW) {
+    if (this->state != READY) {
         return false;
     }
 
@@ -216,39 +203,23 @@ bool SieveData::try_set_testing_data(LinearTestData &testing) {
     // TODO TBD what this should be
     //assert( current_testing_x > 0 ); // 0 is the sentinal in next_sieve.
 
-    // Look for finished sieve to copy over.
-    //for (uint32_t i = 0; i < OPEN_SIEVES; i++) {
-    {
-        auto &[start, next_composites] = next_sieve; //[i];
-        // TODO TBD how this works with the senital of 0
-        if (start == current_offset) {
-            // Set testing data.
-            testing.offset = start;
-            //testing.length = ???
-            testing.composites.swap(next_composites);
+    testing.offset = current_offset;
+    testing.length = length;
+    testing.composites.swap(sieve);
+    testing.setup_ranges();
 
-            testing.state = LinearTestData::ACTIVE;
-            testing.state.notify_one();
+    testing.state = LinearTestData::ACTIVE;
+    testing.state.notify_one();
 
-            next_composites.clear();
-
-            sieves_ready--;
-            sieves_ready.notify_all();
-            assert(next_sieve.first == 0);
-            assert(next_sieve.second.empty());
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/** sieve_mtx must be held while calling */
-void SieveData::go_to_next_range() {
+    sieve.clear();
     current_offset += length;
     if (config.verbose >= 3) {
-        printf("\tMoving to offset=%ld\n", current_offset);
+        printf("\tSieving moving to offset=%ld\n", current_offset);
     }
+    state = SIEVING;
+    state.notify_all();
+
+    return true;
 }
 
 static
@@ -266,7 +237,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         struct Config config = sieve_data->config;
         init_K(config, K);
 
-        assert ( mpz_even_p(K) == true ); // Makes math below easier if true
+        assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
         assert ( config.m_start % 2 == 0); // always start on even
         assert ( config.m_inc % 2 == 0); // all future m_start are even
 
@@ -284,14 +255,17 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             uint64_t prime = iter.next_prime();
             assert (prime == 2);  // we skip 2 which is the oddest prime.
             for (prime = iter.next_prime(); prime < config.max_prime; prime = iter.next_prime()) {
-                // First multiple of 2*prime after K.
-                uint64_t base_r = mpz_fdiv_ui(K, 2*prime);
-                // TODO record mod3 for small
-
-                assert( base_r % 2 == 0 );
-                base_r /= 2;
-                // Can be 0 when prime divides p
+                uint64_t base_r = mpz_fdiv_ui(K, prime);
                 assert( 0 <= base_r && base_r < prime );
+
+                // We only record even distances from K
+                if (base_r % 2 == 1) {
+                    base_r += prime;
+                }
+                base_r /= 2;
+
+
+                // TODO record mod3 for small
 
                 if (prime <= 11) {
                     p_and_start_wheel.emplace_back(prime, base_r);
@@ -305,15 +279,15 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
         const auto M_INC_HALF = m_inc / 2;
         // Need to be able to write to composites[m_inc] as sentinel
-        vector<uint64_t> composites(M_INC_HALF / 64 + 1, 0);
+        vector<uint32_t> composites(M_INC_HALF / 32 + 1, 0);
 #endif  // CPU_SIEVE
 
 #ifdef GPU_SIEVE
         GPUPrimorialSieve gpu_sieve(config);
 #endif // GPU_SIEVE
 
-        // ~10KB
-        vector<uint64_t> wheel(64 * 3*5*7*11);
+        // ~5KB
+        vector<uint32_t> wheel(32 * 3*5*7*11);
 
         uint64_t total_range = 0;
         uint64_t total_runs = 0;
@@ -327,28 +301,12 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         while (is_running && stop_queue <= 1) {
             lock.lock();
             uint64_t offset = sieve_data->current_offset;
-            const auto state = sieve_data->state;
-            if (state == SieveData::FIRST_SIEVE) {
-                if (config.m_start != sieve_data->config.m_start) {
-                    if (config.verbose >= 3)
-                        printf("Reset GPU Sieve to 0\n");
-                }
-            }
-
-            if ((state != SieveData::FIRST_SIEVE && state != SieveData::ACTIVE)
-                    || offset == 0) {
+            // TODO could use wait
+            const auto state = sieve_data->state.load();
+            if (state != SieveData::SIEVING) {
                 lock.unlock();
                 usleep(1'000); // 1ms
                 continue;
-            }
-
-            // Check if any empty next_sieves.
-            {
-                if (sieve_data->sieves_ready == OPEN_SIEVES) {
-                    lock.unlock();
-                    sieve_data->sieves_ready.wait(OPEN_SIEVES);
-                    continue;
-                }
             }
 
             config = sieve_data->config;
@@ -361,12 +319,13 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             assert(m_start % 2 == 0); // or fix the code
 
 #if CPU_SIEVE
-            // Don't need fill because wheel sets (not or's)
-            // std::fill(composites.begin(), composites.end(), 0);
+            // Don't need fill because wheel sets (instead of or'ing).
+            // Make sure composites has enough data space.
+            composites.resize(M_INC_HALF / 32 + 1, 0);
 
             { // Handle all divisors of d at one time.
                 std::fill(wheel.begin(), wheel.end(), 0);
-                uint32_t wheel_bits = 64 * wheel.size();
+                uint32_t wheel_bits = 32 * wheel.size();
 
                 for( auto& temp : p_and_start_wheel) {
                     const auto [p, start] = temp;
@@ -406,7 +365,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     assert( i_start <= t );
                     // TODO maybe try to avoid mults of 3
                     for (; t < i_end; t += prime) {
-                        composites[t >> 6] |= 1ul << (t & 63);
+                        composites[t >> 5] |= 1ul << (t & 31);
                     }
                     temp.second = t;
                 }
@@ -421,7 +380,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 uint32_t prime = temp.first;
                 uint32_t t = temp.second;
                 for (; t < M_INC_HALF; t += prime) {
-                    composites[t >> 6] |= 1ul << (t & 63);
+                    composites[t >> 5] |= 1ul << (t & 31);
                 }
                 temp.second = t - M_INC_HALF;
             }
@@ -447,7 +406,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 uint32_t mismatches = 0;
                 for (uint32_t m_i = 1; m_i < m_inc; m_i += 2) {
                     uint32_t t = m_i >> 1;
-                    uint8_t cpu_bit = (    composites[t >> 6] & (1 << (t & 63))) > 0;
+                    uint8_t cpu_bit = (    composites[t >> 5] & (1 << (t & 31))) > 0;
                     uint8_t gpu_bit = (gpu_composites[t >> 6] & (1 << (t & 63))) > 0;
                     bool mismatch = gpu_bit != cpu_bit;
                     mismatches += mismatch;
@@ -472,33 +431,10 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
             lock.lock();
 
-            assert( offset != sieve_data->current_offset );
-
             double finalize_duration_t;
-            uint64_t num_unknowns;
+            uint64_t num_unknowns = 0;
             { // Finalize
                 auto s_start_t = high_resolution_clock::now();
-
-                vector<uint32_t> *tests = nullptr;
-                /*
-                for (auto& t : sieve_data->next_sieves) {
-                    if (t.first == 0) {
-                        t.first = X;
-                        tests = &t.second;
-                        sieve_data->sieves_ready++;
-                        sieve_data->sieves_ready.notify_all();
-                        break;
-                    }
-                }*/
-                auto &t = sieve_data->next_sieve;
-                assert( t.first == 0 );
-                t.first = offset;
-                tests = &sieve_data->next_sieve.second;
-                sieve_data->sieves_ready++;
-                sieve_data->sieves_ready.notify_all();
-
-                assert( tests != nullptr );
-                assert( tests->empty() );
 
                 /*
                 const vector<uint64_t> &active_bits = sieve_data->get_active_bits();
@@ -526,6 +462,12 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     num_unknowns += 32 - std::popcount(c);
                 }
 
+                // Set data in sieve
+                assert( sieve_data->current_offset == offset );
+                assert( sieve_data->state == SieveData::SIEVING );
+                sieve_data->sieve.swap(composites);
+
+
                 // TODO record number of bits in composites.
                 total_range += m_inc;
                 total_unknown += num_unknowns;
@@ -535,16 +477,13 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 finalize_time += finalize_duration_t;
                 total_time += finalize_duration_t;
 
-                // Move to next range.
-                sieve_data->current_offset += m_inc;
-                if (state == SieveData::FIRST_SIEVE) {
-                    // Mark as active after next_sieves is set.
-                    sieve_data->state = SieveData::ACTIVE;
-                }
+                // Mark as waiting for test_data to pull out the sieve.
+                sieve_data->state = SieveData::READY;
+                sieve_data->state.notify_all();
             }
 
             if ((config.verbose + (config.m_start <= 1'000'000'000)) >= 2) {
-                printf("\tSieve o=%lu with %lu/%lu (%.0f%%) unknown/active"
+                printf("\tSieve o=%lu with %lu/%lu (%.1f%%) unknown/active"
                        " took %.3f + %.3f seconds\n",
                        offset, num_unknowns, m_inc,
                        100.0 * num_unknowns / m_inc,
@@ -632,7 +571,7 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.lock();
                 test_data.lock();
 
-                [[maybe_unused]] uint8_t had_ready = sieve_data->sieves_ready;
+                // TODO could changeto atomic wait.
                 bool set = sieve_data->try_set_testing_data(test_data);
                 if (!set) test_data.gpu_stats.wait_not_active++;
 
@@ -640,8 +579,8 @@ void run_testing_thread(const struct Config og_config) {
                 sieve_mtx.unlock();
 
                 if (set) {
+                    sieve_mtx.unlock();
                     // test_data isn't locked so do this write first before waking up batches.
-                    assert( had_ready > 0 );
                     assert( test_data.active_batches == 0 );
                     test_data.active_batches = GPU_BATCHES;
                     // Mark gpu batches as active
@@ -652,8 +591,7 @@ void run_testing_thread(const struct Config og_config) {
                     }
                 } else {
                     auto t0 = high_resolution_clock::now();
-                    assert( had_ready == 0 );
-                    sieve_data->sieves_ready.wait(0);
+                    sieve_data->state.wait(SieveData::SIEVING);
                     double wait = duration<double>(high_resolution_clock::now() - t0).count();
                     if (og_config.verbose >= 3) {
                         printf("Wait for sieve: o=%lu %.5f seconds\n", test_data.offset, wait);
@@ -709,7 +647,6 @@ void run_testing_thread(const struct Config og_config) {
 
                 test_data.reset();
 
-                sieve_data->go_to_next_range();
                 if (stop_queue) {
                     stop_queue++;
                     if (og_config.verbose >= 2) {
@@ -817,21 +754,6 @@ void prime_gap_test(struct Config config) {
     sieve_data = std::make_unique<SieveData>(config);
 
     // Setup
-    {
-        sieve_mtx.lock();
-
-        auto s_start_t = high_resolution_clock::now();
-        sieve_data->setup_sieve_data(false);
-        if (config.verbose >= 2) {
-            auto s_stop_t = high_resolution_clock::now();
-            printf("\tSetup took %.1f seconds\n",
-                   duration<double>(s_stop_t - s_start_t).count());
-        }
-        if (config.verbose >= 1)
-            printf("\n");
-
-        sieve_mtx.unlock();
-    }
     std::atomic<uint8_t> setup_done{0};
     std::thread sieve_thread(run_sieve_thread, std::ref(setup_done));
     // May take a few seconds for GPUSieve to build up prime lists
@@ -849,8 +771,7 @@ void prime_gap_test(struct Config config) {
         usleep(50'000); // 50ms
     }
 
-    sieve_data->sieves_ready = OPEN_SIEVES / 2;
-    sieve_data->sieves_ready.notify_all();
+    sieve_data->state.notify_all();
 
     {
         if (config.verbose >= 2)
