@@ -233,9 +233,11 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         auto s_thread_start_t = high_resolution_clock::now();
 
         // Some prework
-        mpz_t K;
+        mpz_t K, test;
         struct Config config = sieve_data->config;
         init_K(config, K);
+        mpz_init(test);
+
 
         assert ( mpz_odd_p(K) == true ); // Makes math below easier if true
         assert ( config.m_start % 2 == 0); // always start on even
@@ -251,11 +253,15 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         vector<std::pair<uint32_t, uint32_t>> p_and_start_large;
         p_and_start_large.reserve(all_primes_count);
         {
+            const uint64_t offset = config.m_start;
+
             primesieve::iterator iter;
             uint64_t prime = iter.next_prime();
             assert (prime == 2);  // we skip 2 which is the oddest prime.
             for (prime = iter.next_prime(); prime < config.max_prime; prime = iter.next_prime()) {
                 uint64_t base_r = mpz_fdiv_ui(K, prime);
+                base_r = (base_r + offset) % prime;
+                base_r = (prime - base_r) % prime;
                 assert( 0 <= base_r && base_r < prime );
 
                 // We only record even distances from K
@@ -331,13 +337,16 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     const auto [p, start] = temp;
                     assert (p != 2);
 
+                    mpz_add_ui(test, K, offset + 2 * start);
+                    assert( mpz_divisible_ui_p(test, p) );
+
                     // mark all later multiples
                     uint32_t i = start;
                     for( ; i < wheel_bits; i += p ) {
-                        wheel[i >> 6] |= 1ull << (i & 63);
+                        wheel[i >> 5] |= 1ull << (i & 31);
                     }
 
-                    temp.second = (start + M_INC_HALF) % (2*p);
+                    temp.second += (p - (M_INC_HALF % p)) % p;
                 }
 
                 // wheel tiled
@@ -363,6 +372,10 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     uint32_t prime = temp.first;
                     uint32_t t = temp.second;
                     assert( i_start <= t );
+
+                    mpz_add_ui(test, K, offset + 2*t);
+                    assert( mpz_divisible_ui_p(test, prime) );
+
                     // TODO maybe try to avoid mults of 3
                     for (; t < i_end; t += prime) {
                         composites[t >> 5] |= 1ul << (t & 31);
@@ -482,7 +495,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                 sieve_data->state.notify_all();
             }
 
-            if ((config.verbose + (config.m_start <= 1'000'000'000)) >= 2) {
+            if ((config.verbose + (offset <= 1'000'000'000)) >= 2) {
                 printf("\tSieve o=%lu with %lu/%lu (%.1f%%) unknown/active"
                        " took %.3f + %.3f seconds\n",
                        offset, num_unknowns, m_inc,
@@ -494,6 +507,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
         }
 
         mpz_clear(K);
+        mpz_clear(test);
 
         if (config.verbose >= 1 && total_runs > 0) {
             double total_s = duration<double>(high_resolution_clock::now() - s_thread_start_t).count();

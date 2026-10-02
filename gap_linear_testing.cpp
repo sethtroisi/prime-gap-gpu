@@ -309,19 +309,20 @@ void run_gpu_thread(int runner_num, int verbose,
                 }
                 test_data.unlock();
 
-                uint64_t T = 0;
-
                 // TODO refactor to a function probably
                 // Batch was filled, test_data unlocked now handle updating ranges.
                 for (uint32_t i = 0; i < batch.i; i++) {
                     auto &r = test_data.ranges[batch.m_i[i]];
 
+                    uint64_t T = 0;
                     if (r.state == LinearRange::PRIME) {
-                        // if big gap -> Print
-                        uint32_t gap = r.current - r.start + 1;
-                        if (gap > 6000) {
-                            printf("[%u] Found a big gap at (%lu, %lu) = %u\n",
-                                    batch.m_i[i], offset + r.start, offset + r.current, gap);
+                        if (r.current >= r.jump) {
+                            // if big gap -> Print
+                            uint32_t gap = r.current - r.start + 1;
+                            if (gap > 6000) {
+                                printf("[%u->%u] Found a big gap at (%lu, %lu) = %u\n",
+                                        i, batch.m_i[i], offset + r.start, offset + r.current, gap);
+                            }
                         }
                         r.start = r.current;
                         r.state = LinearRange::NEW;
@@ -338,8 +339,8 @@ void run_gpu_thread(int runner_num, int verbose,
                         // Set jump to the first gap that is unknown (e.g. not composite)
                         // Set current = jump
                         // set PHASE1
-                        r.current = r.start + VALID_GAPS.back() + 2;
-                        if (r.current >= r.range_end) {
+                        r.jump = r.start + VALID_GAPS.back() + 2;
+                        if (r.jump >= r.range_end) {
                             r.state = LinearRange::DONE;
                             test_data.active_ranges = test_data.active_ranges - 1;
                         } else {
@@ -348,10 +349,11 @@ void run_gpu_thread(int runner_num, int verbose,
                                 assert( s < r.range_end );
                                 uint64_t t = s >> 1;
                                 if (!(test_data.composites[t >> 5] & (1 << (t & 31)))) {
-                                    r.current = g;
+                                    r.jump = s;
                                     break;
                                 }
                             }
+                            r.current = r.jump;
                             r.state = LinearRange::PHASE1;
                         }
                     }
@@ -370,11 +372,14 @@ void run_gpu_thread(int runner_num, int verbose,
                                 break;
                             }
                         }
-                        if (s > r.start) {
+                        if (s <= r.start) {
                             r.state = LinearRange::PHASE2;
-                            r.current = r.jump;
+                            assert( r.jump > r.current );
+                            // Need this so +2 takes us to r.jump
+                            r.current = r.jump-2;
                         } else {
                             r.current = s;
+                            T = s;
                         }
                     }
                     if (r.state == LinearRange::PHASE2) {
@@ -400,12 +405,15 @@ void run_gpu_thread(int runner_num, int verbose,
 
                     if (false && i == 0) {
                         const auto &r = test_data.ranges[batch.m_i[i]];
-                        printf("\t\tr[0] = {[%lu, %lu) | %u -> %lu %lu -> %lu\n",
+                        printf("\t\tr[%u] = {[%lu, %lu) | %u -> %lu %lu -> %lu\n",
+                                batch.m_i[i],
                                 r.range_start, r.range_end,
                                 r.state,
                                 r.start, r.current, T);
 
                     }
+
+                    assert ( T > 0 || r.state == LinearRange::DONE );
 
                     mpz_add_ui(*batch.z[i], K, offset + T);
                 }

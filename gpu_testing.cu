@@ -50,7 +50,7 @@ const int THREADS_PER_INSTANCE = (BITS <= 512) ? 4 : 8;
  * GPU_BATCHES the number of simultanious batches to create & queue.
  * GPU_BATCH_SIZE is 2^n | best is between 4K and 16K.
  */
-const size_t GPU_BATCHES = 3;
+const size_t GPU_BATCHES = 1;
 const size_t GPU_BATCH_SIZE = 8 * 1024;
 
 
