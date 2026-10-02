@@ -40,10 +40,13 @@ using namespace std::chrono;
 
 
 const vector<uint16_t> VALID_GAPS = {
-    10624, 10648, 10688, 10690, 10852, 10878,
-    10930, 10946, 10954, 10972, 11002, 11038,
-    11060, 11062, 11068, 11080, 11092, 11098,
-    11104, 11114, 11116, 11122, 11138, 11146,
+    5000, 5100, 5200, 5300, 5400, 5500,
+
+
+//    10624, 10648, 10688, 10690, 10852, 10878,
+//    10930, 10946, 10954, 10972, 11002, 11038,
+//    11060, 11062, 11068, 11080, 11092, 11098,
+//    11104, 11114, 11116, 11122, 11138, 11146,
     // And everything bigger
 };
 
@@ -58,7 +61,7 @@ LinearTestData::LinearTestData(const struct Config config)
     init_K(config, test_k);
 
     // TODO number of batches from somewhere.
-    ranges.resize(3 * GPU_BATCH_SIZE);
+    ranges.resize(GPU_BATCH_SIZE);
 
     composites.resize((length/2 + 31) / 32, 0);
     reset();
@@ -141,7 +144,7 @@ void LinearTestData::reset() {
 }
 
 void LinearTestData::setup_ranges() {
-    const uint64_t N = 3 * GPU_BATCH_SIZE;
+    const uint64_t N = GPU_BATCH_SIZE;
     assert( ranges.size() ==  N );
 
     const auto B = length;
@@ -317,12 +320,9 @@ void run_gpu_thread(int runner_num, int verbose,
                     uint64_t T = 0;
                     if (r.state == LinearRange::PRIME) {
                         if (r.current >= r.jump) {
-                            // if big gap -> Print
-                            uint32_t gap = r.current - r.start + 1;
-                            if (gap > 6000) {
-                                printf("[%u->%u] Found a big gap at (%lu, %lu) = %u\n",
-                                        i, batch.m_i[i], offset + r.start, offset + r.current, gap);
-                            }
+                            uint32_t gap = r.current - r.start;
+                            printf("[%u->%u] Found a big gap at (%lu, %lu) = %u\n",
+                                    i, batch.m_i[i], offset + r.start, offset + r.current, gap);
                         }
                         r.start = r.current;
                         r.state = LinearRange::NEW;
