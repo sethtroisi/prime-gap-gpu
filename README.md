@@ -16,17 +16,19 @@ TBD
 In general this is going to be easy under Ubuntu 24.04 or later
 
 ```bash
-$ sudo apt install libgmp10 libgmp-dev
+$ sudo apt install libgmp10 libgmp-dev libprimesieve-dev
 $ sudo apt install build-essential automake autoconf make
 # CUDA is required but I'm not sure what apt install that is
 ```
 
 ```
+# For misc/record_check.py
 $ sudo apt install libmpfr-dev libmpc-dev
 $ python -m pip install --user gmpy2
 ```
 
 ```
+$ git clone https://github.com/NVlabs/CGBN.git
 $ git clone https://github.com/sethtroisi/prime-gap-gpu.git
 $ cd prime-gap-gpu
 ```
