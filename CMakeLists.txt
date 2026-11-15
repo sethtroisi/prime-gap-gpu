@@ -60,3 +60,12 @@ add_executable(gpu_benchmark
         gpu_benchmark.cu
                 gap_common.cpp)
 target_link_libraries(gpu_benchmark PRIVATE common)
+
+add_executable(gpu_sieve_benchmark
+        gpu_sieve_benchmark.cu
+                gpu_sieve.cu
+                gap_common.cpp)
+# CPU reference sieve in the benchmark uses OpenMP
+find_package(OpenMP REQUIRED)
+target_link_libraries(gpu_sieve_benchmark PRIVATE common OpenMP::OpenMP_CXX)
+target_compile_options(gpu_sieve_benchmark PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>)

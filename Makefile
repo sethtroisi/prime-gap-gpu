@@ -49,7 +49,11 @@ gap_search_primorial: gap_search_primorial.cpp $(OBJS)
 gpu_benchmark: gpu_benchmark.cu gap_common.o
 	$(NVCC) $^ -o $@ -DGPU_BITS=$(BITS) -DMP=$(MP) $(CUDA_FLAGS) -I../CGBN/include -lgmp
 
+# Doesn't need CGBN, see run_sieve_benchmark.sh / colab_benchmark.sh
+gpu_sieve_benchmark: gpu_sieve_benchmark.cu gpu_sieve.o gap_common.o
+	$(NVCC) $^ -o $@ -DMP=$(MP) $(CUDA_FLAGS) -Xcompiler -fopenmp -lgmp -lprimesieve -lgomp
+
 .PHONY: all clean
 
 clean:
-	rm -f $(OUT) *.o gpu_benchmark
+	rm -f $(OUT) *.o gpu_benchmark gpu_sieve_benchmark

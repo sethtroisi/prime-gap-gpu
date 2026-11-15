@@ -45,6 +45,20 @@ make
 ```
 
 
+## Benchmarking the GPU sieve
+
+```
+make gpu_sieve_benchmark MP=66 && ./gpu_sieve_benchmark -p 353 -d 2310 --minc 50000000 --max-prime 1000
+
+# Build + run + append to sieve_benchmark_results.csv (auto detects ARCH and MP)
+./run_sieve_benchmark.sh --tag my-change
+
+# Same but on a Colab GPU (needs the colab CLI)
+./colab_benchmark.sh --tag my-change
+```
+
+See [sieve_notes.md](sieve_notes.md) for results and what was tried.
+
 ## Misc
 
 ```

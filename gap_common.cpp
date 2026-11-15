@@ -280,6 +280,7 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         {"min-merit",        required_argument, 0,   4  },
 
         {"max-prime",        required_argument, 0,   5  },
+        {"prime-limit",      required_argument, 0,   5  },  // alias of max-prime
 
         {"cpu-fraction",     required_argument, 0,   7  },
         {"cpu-threads",      required_argument, 0,   8  },

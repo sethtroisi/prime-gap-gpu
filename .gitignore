@@ -4,6 +4,7 @@ gap_search_primorial
 gap_search_primorial_old
 gap_search_linear
 gpu_benchmark
+gpu_sieve_benchmark
 *.o
 a.out
 
