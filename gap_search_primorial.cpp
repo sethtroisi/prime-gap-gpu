@@ -120,8 +120,9 @@ int main(int argc, char* argv[]) {
             __GNU_MP_VERSION, __GNU_MP_VERSION_MINOR, __GNU_MP_VERSION_PATCHLEVEL);
     }
 
-    if (config.max_prime < 2'000'000 || 1'500'000'000 < config.max_prime) {
-        printf("\tmax_prime(%'ld) should be between 2M and 1.5B\n", config.max_prime);
+    // Primes are stored as uint32_t.
+    if (config.max_prime < 2'000'000 || (1ull << 32) <= config.max_prime) {
+        printf("\tmax_prime(%'ld) should be between 2M and 2^32 (4294M)\n", config.max_prime);
         return 1;
     }
 
@@ -546,16 +547,16 @@ void SieveData::remove_prime_bitset(vector<uint32_t> &primes) {
  * a^-1 * a mod p = 1
  * assumes that gcd(a, p) = 1
  */
-static int32_t _invert(int32_t a, int32_t p) {
+static int64_t _invert(int64_t a, int64_t p) {
     // Use extended euclidean algorithm to get
     // a * x + p * y = 1
     // inverse of a is then x
-    int x = 1, y = 0;
-    int x1 = 0, y1 = 1, a1 = a, p1 = p;
+    int64_t x = 1, y = 0;
+    int64_t x1 = 0, y1 = 1, a1 = a, p1 = p;
     while (p1) {
-        int32_t q = a1 / p1;
+        int64_t q = a1 / p1;
 
-        int32_t t = x1;
+        int64_t t = x1;
         x1 = x - q * x1;
         x = t;
 
@@ -635,6 +636,12 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
 #ifdef GPU_SIEVE
         GPUSieve gpu_sieve(config);
+#if !CPU_SIEVE
+        // The estimate above is ~5% low which skipped the largest primes.
+        prime_count = gpu_sieve.get_num_primes();
+#endif
+        // Filled outside of the lock then swapped into next_sieves.
+        vector<uint32_t> staged_tests;
 #endif // GPU_SIEVE
 
         uint64_t D = config.d;
@@ -691,6 +698,14 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
             }
 
             config = sieve_data->config;
+
+#ifdef GPU_SIEVE
+            // Stale active bits within a batch are fine, try_set_testing_data removes found primes.
+            if (gpu_sieve.wants_active_bits(config.m_start, X, max_p_i)) {
+                const vector<uint64_t> &active_bits = sieve_data->get_active_bits();
+                gpu_sieve.set_active_bits(config.m_start, active_bits.data(), active_bits.size());
+            }
+#endif // GPU_SIEVE
 
             lock.unlock();
 
@@ -826,7 +841,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     mi_0 += (mi_0 & 1) ? 0 : prime;
                     mi_0 >>= 1; // Divide by 2 (even indexes aren't stored)
 
-                    for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
+                    for (uint64_t t = mi_0; t < M_INC_HALF; t += prime) {
                         composites[t >> 6] |= 1ull << (t & 63);
                     }
                 }
@@ -843,7 +858,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                     mi_0 += (mi_0 & 1) ? 0 : prime;
                     mi_0 >>= 1;
 
-                    for (uint32_t t = mi_0; t < M_INC_HALF; t += prime) {
+                    for (uint64_t t = mi_0; t < M_INC_HALF; t += prime) {
                         composites[t >> 6] |= 1ull << (t & 63);
                     }
                 }
@@ -851,9 +866,17 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 #endif  // CPU_SIEVE
 
 #ifdef GPU_SIEVE
+            {
+                uint32_t gpu_unknowns_count = 0;
+                const uint32_t *gpu_unknowns = gpu_sieve.run_unknowns(
+                        m_start, m_inc, X, max_p_i, &gpu_unknowns_count);
+                staged_tests.assign(gpu_unknowns, gpu_unknowns + gpu_unknowns_count);
+            }
+#ifdef GPU_VERIFY
             // TODO get exact prime counts to agree.
             uint64_t *gpu_composites = gpu_sieve.run(
                     m_start, m_inc, X, max_p_i);
+#endif  // GPU_VERIFY
             prime = max_p_i == prime_count ?
                 config.max_prime : (max_p_i * std::log(max_p_i));
 #endif // GPU_SIEVE
@@ -926,16 +949,15 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
 
                 assert( sieve_data->num_active() );
 
+#ifdef GPU_SIEVE
+                tests->swap(staged_tests);
+                staged_tests.clear();
+#else
                 const vector<uint64_t> &active_bits = sieve_data->get_active_bits();
                 for (uint32_t i = 0; i < active_bits.size(); i++) {
                     uint64_t active = active_bits[i];
                     uint32_t partial = (64 * i) << 1;
-#ifdef GPU_SIEVE
-                    //active ^= (active & gpu_composites[i]);
-                    active &= ~gpu_composites[i];
-#else
                     active &= ~composites[i];
-#endif  // GPU_SIEVE
                     // Find all set bits in active
                     while (active != 0) {
                         int r = __builtin_ctzl(active);
@@ -946,6 +968,7 @@ void run_sieve_thread(std::atomic<uint8_t> &setup_done) {
                         tests->push_back(m_i);
                     }
                 }
+#endif  // GPU_SIEVE
 
                 unknowns_size = tests->size();
                 assert( active_size < 1'000 || unknowns_size > 0 );

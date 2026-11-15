@@ -404,9 +404,9 @@ Config Args::argparse(int argc, char* argv[], Pr program) {
         config.valid = 0;
         cout << "max_prime must be set" << endl;
     }
-    if (config.max_prime > 2'000'000'000) {
+    if (config.max_prime >= (1ull << 32)) {
         config.valid = 0;
-        cout << "max_prime > 2B not supported" << endl;
+        cout << "max_prime >= 2^32 (4294 million) not supported" << endl;
     }
 
     if (0) { // Not needed anymore?
