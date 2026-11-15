@@ -53,7 +53,11 @@ gpu_benchmark: gpu_benchmark.cu gap_common.o
 gpu_sieve_benchmark: gpu_sieve_benchmark.cu gpu_sieve.o gap_common.o
 	$(NVCC) $^ -o $@ -DMP=$(MP) $(CUDA_FLAGS) -Xcompiler -fopenmp -lgmp -lprimesieve -lgomp
 
+# Micro benchmarks of alternative sieve kernels, see sieve_notes.md
+gpu_sieve_experiments: misc/gpu_sieve_experiments.cu
+	$(NVCC) $^ -o $@ $(CUDA_FLAGS) -Xcompiler -fopenmp -lgmp -lprimesieve -lgomp
+
 .PHONY: all clean
 
 clean:
-	rm -f $(OUT) *.o gpu_benchmark gpu_sieve_benchmark
+	rm -f $(OUT) *.o gpu_benchmark gpu_sieve_benchmark gpu_sieve_experiments
